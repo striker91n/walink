@@ -16,8 +16,8 @@ calling does not work in the user's country anyway).
 ### Verified facts (checked, not assumed)
 - **Device cap:** iPhone 6 Plus = Apple **A8**, 1 GB RAM, max **iOS 12.5.8** (dropped at iOS 13).
   So the official WhatsApp (needs iOS 15.1+) can never run here → custom client is the only route.
-- **Jailbreak:** checkra1n (checkm8), iPhone 5s→X, iOS 12.0+. **Semi-tethered** (re-run after reboot).
-  SSH is exposed on device port **44**.
+- **Jailbreak:** first assumed checkra1n (checkm8); **corrected to Amethyst** — see the dedicated
+  entry below. **Semi-untethered**, Procursus bootstrap, SSH on port **22**.
 - **On-device runtime:** [nodejs-mobile](https://github.com/nodejs-mobile/nodejs-mobile) publishes
   prebuilt iOS binaries; latest is **v18.20.4** (Node 18.20.4, V8 10.2, OpenSSL 3.0.13, ICU off).
 - **Blocker found & solved:** the prebuilt `NodeMobile.framework` declares
@@ -65,7 +65,7 @@ calling does not work in the user's country anyway).
 - [ ] Verify **Baileys version vs Node 18** (`engines.node`) — worker A is pinning the newest OK one.
 - [x] **JIT chosen** (2026-10-16) — build without `--jitless`, sign `dynamic-codesigning`. To confirm
       on device that checkra1n + amfi patch actually permits RWX/JIT for the app. `jitless` = fallback.
-- [ ] fetch-runtime.sh artifact name must be `NodeMobile-ios-arm64-jit` (default script uses non-jit name) — fix after scripts land.
+- [x] fetch-runtime.sh artifact name default fixed to `NodeMobile-ios-arm64-jit` (JIT build).
 - [ ] Everything is unvalidated until it runs on the device.
 - [ ] Ban risk: **documented**, burner number required.
 - [ ] Not yet installed: **Theos** (`scripts/bootstrap-theos.sh`).
@@ -105,3 +105,26 @@ calling does not work in the user's country anyway).
   script (it was discarding everything); restore/save-cache `nodejs-mobile/out` +
   `tools/ios-framework/bin` (key per-jit, unique per run + `restore-keys` prefix) → incremental
   rebuilds. Also skip `brew install cmake` when cmake is already present.
+- Pushed `e81f6c6`: cache restore/save steps are `continue-on-error` so a cache hiccup can't fail an
+  otherwise-good framework build.
+
+### Day 1 (cont.) — Build is compiling; static verifications done
+- CI run **38931568114** (JIT) got past the ~45 s fast-fail and is now **compiling** → the Python fix
+  worked. Commits in play: `7d525f9` (workflow reset), `e81f6c6` (cache hardening).
+- Verified against Theos `makefiles/package.mk`: the target order is
+  `package: internal-package-check stage before-package internal-package after-package` →
+  our `before-package::` hook runs **after** staging, so the embedded
+  `Walink.app/Frameworks/NodeMobile.framework` copy is correctly ordered (not clobbered).
+- Verified the CI seds match nodejs-mobile **v18.20.4** `tools/ios_framework_prepare.sh` exactly:
+  `make clean` on lines 61/84/108; `--v8-options=--jitless` on 71/94/118; `getconf _NPROCESSORS_ONLN`
+  on 74/98/121. So the JIT rebuild really drops `--jitless`.
+- Reviewed the app sources (read-only): iOS-12-safe APIs only; `WLEngine` runs `node_start` on a
+  detached thread, sets `WALINK_PORT`/`WALINK_DATA_DIR`, `chdir`s to Documents, resolves
+  `engine/main.js` from the bundle, and drives the loopback API with `NSURLSession` + a serial queue.
+  Entitlements = `platform-application` + `dynamic-codesigning` (JIT). `Walink.entitlements`,
+  `Walink-Info.plist` (MinimumOSVersion 12.0), and `ios/control` all look correct.
+- Still unproven until the artifact exists: on-device JIT/RWX under Amethyst; Baileys link as a
+  companion device.
+- Open risks: (a) dev-box `theos` bootstrap needs `ldid` from a source that Docker/apt may not
+  provide; (b) building `theos` natively needs an iOS 12 SDK (script picks 12.x from theos/sdks);
+  (c) build cache may approach GitHub's per-repo cache size limit — narrow if needed.
