@@ -564,21 +564,38 @@ async function handleRequest(req, res) {
   }
 }
 
-// Diagnostic: time a tight arithmetic loop so engine.log records whether V8 is running its
-// optimizing tiers or the interpreter only. Interpreter-only ("--jitless") V8 is typically many
-// times slower here, which is how we tell whether a runtime really has JIT enabled — for example
-// after changing the app's `node_v8_options`.
+// Diagnostic: time a tight INTEGER loop at startup and log the result. Integer arithmetic is where
+// V8's optimizing tiers make an order-of-magnitude difference; an earlier version of this probe used
+// a float `%` loop, which is bound by the same libcall (fmod) in both tiers and therefore showed
+// almost no JIT signal — it could not distinguish JIT from the interpreter. This one can.
 function logStartupBenchmark() {
-  const iterations = 2_000_000;
-  let acc = 0;
+  const iterations = 20_000_000;
+  let x = 1;
   const started = Date.now();
-  for (let i = 1; i <= iterations; i++) {
-    acc = (acc + i * 2654435761) % 2147483647;
+  for (let i = 0; i < iterations; i++) {
+    x = (x * 3 + i) | 0;
   }
   const ms = Math.max(1, Date.now() - started);
-  log(`v8 benchmark: ${iterations} iterations in ${ms} ms (~${Math.round(iterations / (ms / 1000))} ops/s)`);
+  log(`v8 benchmark: ${iterations} int iterations in ${ms} ms (~${Math.round(iterations / (ms / 1000))} ops/s) x=${x}`);
+  log(`node execArgv: ${JSON.stringify(process.execArgv)}`);
 }
 
+// Binary probe: V8's --jitless mode disables WebAssembly outright (there is no wasm interpreter), so
+// "can we compile a module?" answers "is JIT actually enabled?" far more reliably than any timing.
+function logWasmProbe() {
+  try {
+    if (typeof WebAssembly === 'undefined') {
+      log('wasm probe: WebAssembly is undefined -> JIT is disabled (jitless)');
+      return;
+    }
+    new WebAssembly.Module(new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]));
+    log('wasm probe: compiled an empty module -> JIT is ENABLED');
+  } catch (err) {
+    log(`wasm probe: failed (${err && err.message}) -> JIT is likely disabled`);
+  }
+}
+
+logWasmProbe();
 logStartupBenchmark();
 
 const server = http.createServer(handleRequest);

@@ -499,3 +499,29 @@ died on the 7 GB runner and left the next run to start from zero again. Three ca
   missing `pthread_jit_write_protect_np` import is a warning sign that executable pages may be denied
   on this OS, so the CI artifact has to be verified on-device with this same benchmark before we claim
   JIT. Until then the A8 runs interpreter-only, which the app tolerates.
+
+### Day 1 (cont.) — JIT verdict, properly measured this time
+The conclusion above was reached from a probe that turned out to be **invalid**: a float `%` loop is an
+fmod libcall in *both* V8 tiers, so it can never show a JIT win (851 ms vs 750 ms meant nothing). The
+binary audit then argued the *opposite* from disassembly — `node::InitializeNodeWithArgs` does
+`adrp/add x0, "--jitless"; mov w1, #9; bl v8::V8::SetFlagsFromString`, applying the baked
+`NODE_V8_OPTIONS="--jitless"` **before** argv is parsed, with an upstream comment saying that ordering
+exists so callers can undo it from the command line. So the experiment was redone with two sound probes:
+- an **integer** loop (`x = (x*3+i)|0`), which the optimizing tiers speed up ~4x and the interpreter
+  cannot (host calibration: 161 ms JIT vs 698 ms jitless; `--no-jitless` = 150 ms), and
+- a **binary** probe: `--jitless` disables WebAssembly outright, so "does an empty `WebAssembly.Module`
+  compile?" cannot be faked by a slow CPU.
+
+Device results, 20,000,000 integer iterations:
+
+| configuration | integer loop | wasm probe | `process.execArgv` |
+| --- | --- | --- | --- |
+| no flag (baseline) | **3225 ms** | **WebAssembly is undefined -> jitless** | `["--experimental-global-webcrypto"]` |
+| `--no-jitless` | **3441 ms** | (probe absent from that build) | `["--no-jitless","--experimental-global-webcrypto"]` |
+
+So the flag **is accepted** by Node — it shows up in `execArgv` — yet nothing changes: 3441 ms vs 3225 ms
+is noise, where a working JIT would drop it ~4x. The prebuilt is jitless and cannot be talked out of it.
+- Kept both probes (cheap, and together they make any future JIT claim verifiable from one log line);
+  the `--no-jitless` flag was removed from `node_start`'s argv.
+- Therefore JIT genuinely requires a framework whose *build config* omits `--jitless` (the CI route),
+  and when that artifact lands it must pass the wasm probe on the device before we believe it.
