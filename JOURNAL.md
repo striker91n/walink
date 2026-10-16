@@ -468,3 +468,34 @@ died on the 7 GB runner and left the next run to start from zero again. Three ca
   `out/` is restored and the build is incremental — and because the cache is saved even on failure, a
   run that dies now resumes rather than restarting. The device is unaffected either way: it runs the
   v16.17.1 prebuilt, and CI exists only for the optional JIT runtime.
+
+### Day 1 (cont.) — Can JIT be had without compiling? (audit + on-device measurement)
+- **Measured baseline on the device:** `v8 benchmark: 2000000 iterations in 851 ms (~2.35M ops/s)`,
+  now logged to `engine.log` at every startup. For calibration the same loop on this Linux host is
+  **35 ms with JIT** and **146 ms under `--jitless`** (node 24), so 851 ms on an A8 is unambiguously
+  interpreter-class. Every future JIT attempt is therefore measurable instead of hoped-for.
+- **`node_v8_options` is NOT an app-side Info.plist key** (read-only binary audit, ~90% confidence).
+  The binary contains no `CFBundle`/`NSBundle`/`mainBundle`/`InfoDictionary` strings and imports no
+  CoreFoundation/Foundation at all, so nothing in it can read the app's plist. The
+  `"node_v8_options": "--jitless"` string is one field of an embedded **build-config JSON** baked in at
+  build time. Adding a plist key would have done nothing — that experiment was cancelled before it
+  could waste a build/deploy cycle (which is exactly why we asked for it to be checked first).
+- The precise `--jitless` call site is still unconfirmed (~50%): a standalone `--jitless` literal sits
+  in the `node.cc` option block near `NODE_OPTIONS`, and `V8::SetFlagsFromString`, `FLAG_jitless` and
+  `FLAGDEFAULT_jitless` symbols exist — so it is probably applied from that baked config.
+- Mechanically, JIT looks doubtful for this build: it imports `mmap`, `mprotect` and
+  `sys_icache_invalidate`, but **not `pthread_jit_write_protect_np`**, which Apple's arm64 W^X JIT path
+  uses. TurboFan and Sparkplug are linked (Maglev is not) and CodeRange symbols exist.
+- Empirical next step: pass `--no-jitless` in `node_start`'s argv. V8 flags may still change until the
+  isolate is created, so a flag applied later can beat one applied earlier; the app already carries the
+  `dynamic-codesigning` entitlement. The deploy pipeline fails loudly if the engine does not boot, in
+  which case the flag comes straight back out.
+- **Result: it does not work.** With `--no-jitless` in argv the benchmark was **750 ms vs the 851 ms
+  baseline** — ~12%, i.e. noise, where JIT would be a 4–20x jump. nodejs-mobile's baked `--jitless`
+  wins over argv, so the prebuilt is effectively interpreter-only. The flag was reverted and a comment
+  in `WLEngine.m` records the negative result so nobody re-tries it; the startup benchmark stays in the
+  engine because it makes any future JIT change measurable from one line of `engine.log`.
+- Conclusion: JIT means building a framework *without* `--jitless` (the CI route). And even then, the
+  missing `pthread_jit_write_protect_np` import is a warning sign that executable pages may be denied
+  on this OS, so the CI artifact has to be verified on-device with this same benchmark before we claim
+  JIT. Until then the A8 runs interpreter-only, which the app tolerates.

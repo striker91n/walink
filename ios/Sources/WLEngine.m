@@ -90,6 +90,12 @@ static NSString * const WLEngineBaseURL = @"http://127.0.0.1:8787";
         // Node 16 has no `crypto` global unless this flag is set, and Baileys 6.17.16
         // uses bare WebCrypto (`crypto.subtle`) in its noise handshake (Utils/crypto.js
         // -> hkdf), so without it the first connection attempt throws.
+        //
+        // NOTE: `--no-jitless` was tried here and did NOT work. The startup benchmark (below, in
+        // the engine) stayed at interpreter speed — 750 ms vs 851 ms for 2,000,000 iterations, i.e.
+        // noise, where JIT would be a 4-20x jump. nodejs-mobile bakes `--jitless` into its build
+        // config and it wins over argv, so this runtime is effectively interpreter-only. Enabling
+        // JIT needs a framework built without it (the CI workflow), not a flag here. See JOURNAL.md.
         char *argv[] = {
             strdup("node"),
             strdup("--experimental-global-webcrypto"),
