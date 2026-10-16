@@ -564,6 +564,23 @@ async function handleRequest(req, res) {
   }
 }
 
+// Diagnostic: time a tight arithmetic loop so engine.log records whether V8 is running its
+// optimizing tiers or the interpreter only. Interpreter-only ("--jitless") V8 is typically many
+// times slower here, which is how we tell whether a runtime really has JIT enabled — for example
+// after changing the app's `node_v8_options`.
+function logStartupBenchmark() {
+  const iterations = 2_000_000;
+  let acc = 0;
+  const started = Date.now();
+  for (let i = 1; i <= iterations; i++) {
+    acc = (acc + i * 2654435761) % 2147483647;
+  }
+  const ms = Math.max(1, Date.now() - started);
+  log(`v8 benchmark: ${iterations} iterations in ${ms} ms (~${Math.round(iterations / (ms / 1000))} ops/s)`);
+}
+
+logStartupBenchmark();
+
 const server = http.createServer(handleRequest);
 
 server.on('error', (err) => {

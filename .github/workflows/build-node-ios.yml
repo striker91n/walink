@@ -102,6 +102,8 @@ jobs:
           #    every cc line at -miphoneos-version-min=13.0 — which is exactly what made the
           #    framework import ___chkstk_darwin and abort in dyld on iOS 12.
           sed -i '' "s/'IPHONEOS_DEPLOYMENT_TARGET': '13\.0'/'IPHONEOS_DEPLOYMENT_TARGET': '12.0'/g" common.gypi
+          # Keep the annotation on that line honest too (it explains the -miphoneos-version-min).
+          sed -i '' 's/# -miphoneos-version-min=13\.0/# -miphoneos-version-min=12.0/g' common.gypi
           echo "--- common.gypi deployment target ---"
           grep -n "IPHONEOS_DEPLOYMENT_TARGET" common.gypi | head -3
           # 2. Keep the Xcode link step consistent with it.
