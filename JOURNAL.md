@@ -40,6 +40,9 @@ calling does not work in the user's country anyway).
 - Native **ObjC/UIKit Theos app**, `.deb` install via `dpkg` (jailbroken, no signing).
 - Engine (Node 18 + Baileys) exposes loopback HTTP on `127.0.0.1:8787`.
 - Link as **companion device** (like WhatsApp Web): scan QR once. **Use a burner, not a main number.**
+- **JIT enabled (user decision, 2026-10-16):** build the runtime WITHOUT `--v8-options=--jitless`, and
+  sign the app with the `dynamic-codesigning` entitlement. Faster JS on the A8. The workflow's `jit`
+  input now defaults to **true**; the jitless build stays available as a fallback (`-f jit=false`).
 
 ### Repo / tooling
 - Dev box = Linux (CachyOS). Has `clang`, `ldid`, `make`, `node`/`npm`, `gh` (2.102.0),
@@ -60,7 +63,9 @@ calling does not work in the user's country anyway).
 - [ ] CI: first run of `build-node-ios.yml` may need an **Xcode pin** (Node 18.20.4 built with an
       older Xcode); fallback runner `macos-13`.
 - [ ] Verify **Baileys version vs Node 18** (`engines.node`) — worker A is pinning the newest OK one.
-- [ ] V8 **jitless** perf on an A8 is unknown → may be slow; JIT build is the fallback.
+- [x] **JIT chosen** (2026-10-16) — build without `--jitless`, sign `dynamic-codesigning`. To confirm
+      on device that checkra1n + amfi patch actually permits RWX/JIT for the app. `jitless` = fallback.
+- [ ] fetch-runtime.sh artifact name must be `NodeMobile-ios-arm64-jit` (default script uses non-jit name) — fix after scripts land.
 - [ ] Everything is unvalidated until it runs on the device.
 - [ ] Ban risk: **documented**, burner number required.
 - [ ] Not yet installed: **Theos** (`scripts/bootstrap-theos.sh`).

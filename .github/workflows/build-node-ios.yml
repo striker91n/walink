@@ -8,7 +8,7 @@ on:
       jit:
         description: "Build V8 with JIT (jailbroken-only; faster, not App-Store legal)"
         type: boolean
-        default: false
+        default: true
   push:
     tags:
       - "runtime-*"
