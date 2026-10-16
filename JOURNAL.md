@@ -173,3 +173,52 @@ calling does not work in the user's country anyway).
   Node 18.20.4. nodejs-mobile does have an unreleased **`update22-9-0`** branch (Node 22.9.0) that we
   could build in CI. Options: (a) keep Node 18 + vulnerable Baileys (fast, burner number),
   (b) build Node 22 from that branch + fixed Baileys (slow/experimental).
+
+### Day 1 (cont.) — First build attempt: Theos had no iOS toolchain
+- `scripts/build.sh` got all the way to `make package` and failed with
+  `/home/axies/theos/toolchain/linux/iphone/bin/clang: No such file or directory`.
+  Cause: the manual bootstrap cloned `theos` + the iOS SDK but never installed the cross-toolchain.
+- Fix: Theos's own installer downloads a prebuilt Linux toolchain —
+  `https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-$ARCH.tar.xz`
+  (ARCH=x86_64 here) — extracted into `$THEOS/toolchain/`. Installing that, then rebuilding.
+  (`install-theos` also offers a Swift-capable variant from `kabiroberai/swift-toolchain-linux`; we
+  only need ObjC, so the smaller non-Swift toolchain is right.)
+
+### Day 1 (cont.) — Subagent models: online research + empirical test
+Free models on OpenCode Zen (authoritative list: https://opencode.ai/docs/zen/):
+GLM-5.3-Flash Free, DeepSeek V4.1 Flash Free, MiMo-V2.6-Flash Free, MiMo-V2.5 Free,
+LongCat 2.5 Preview Free, Nemotron 3 Ultra / 3.5 Lightning / 3.5 Super VL Free,
+Space Bunny Free (stealth), Beam Free, LL Alpha Free (stealth), Big Pickle (stealth), Exo Free,
+Muse Spark 1.3 Contributor Free, Jev 1.13 Free.
+- **Data policy differs** (matters for a public repo / real device work):
+  GLM-5.3-Flash, DeepSeek V4.1 Flash, LongCat 2.5, Space Bunny, Beam = zero-retention, no training.
+  MiMo, Big Pickle, LL Alpha, Exo, Muse Spark *may* train on your data.
+  Nemotron free endpoints are "trial use only — do not submit personal or confidential data".
+- **Big Pickle is broken** — upstream issue `anomalyco/opencode#50202` (looping / stalls / language
+  drift). My own test also returned a wrong answer (`1.0.0` vs the file's actual `0.1.0`). Avoid.
+- Empirically tested real tool-calling (grep one line out of `engine/package.json`) — all returned the
+  correct line: **GLM-5.3-Flash Free**, **DeepSeek V4.1 Flash Free**, **LongCat 2.5 Preview Free**,
+  **MiMo-V2.6-Flash Free**.
+- **Chosen default model for subagents: `opencode/glm-5.3-flash-free`** (strong coding family,
+  zero-retention, free). Fallbacks: `opencode/deepseek-v4.1-flash-free`,
+  `opencode/longcat-2.5-preview-free`.
+
+### Day 1 (cont.) — First successful build, and the path bugs it exposed
+- `./scripts/build.sh` now **succeeds**, producing
+  `ios/packages/com.striker91n.walink_0.1.0-1+debug_iphoneos-arm.deb` (38 MB). Verified contents:
+  `Applications/Walink.app/Walink` (arm64 binary), `Frameworks/NodeMobile.framework/NodeMobile`
+  (55 MB uncompressed), the whole `engine/` including `node_modules` (7620 files), and both launch
+  images. Compilation of all four `Sources/*.m` passed on the first toolchain-backed run.
+- Bugs found and fixed while getting there:
+  * **`ios/Makefile`** pointed the linker at `ios/vendor`, but the framework is at repo-root
+    `vendor/` (the target dir for `fetch-runtime.sh`) → `-I`/`-F` and the `before-package` copy now
+    use `$(THEOS_PROJECT_DIR)/../vendor`. (Symptom was `ld: framework not found NodeMobile`.)
+  * **`scripts/deploy.sh`** searched `packages/` for the `.deb`, but `build.sh` writes
+    `ios/packages/` → now searches both, and the `find` is `|| true` (it previously returned
+    non-zero for the missing dir, and `set -e` + `pipefail` aborted the whole script silently).
+  * **`scp` was passed `-p <port>`**; `scp` wants capital `-P` (`-p` means "preserve timestamps"),
+    so it tried to copy a file literally named `22` → split `SCP_OPTS` from `SSH_OPTS`.
+- `scripts/bootstrap-theos.sh` gained step **3b** (download the prebuilt iOS cross-toolchain into
+  `$THEOS/toolchain/`), so a fresh machine no longer half-bootstraps and then fails at link time.
+- Device reachable at **192.168.1.71:22** over Wi-Fi (iPhone7,1 / iOS 12.5.8); deploying with
+  `DEVICE_SSH_HOST=192.168.1.71 DEVICE_SSH_PORT=22 ./scripts/deploy.sh`.

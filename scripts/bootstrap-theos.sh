@@ -146,6 +146,33 @@ cp -R "$SELECTED_SDK" "$DEST_SDK"
 echo "==> Installed SDK into: $DEST_SDK"
 
 # ---------------------------------------------------------------------------
+# 3b. Install the iOS cross-toolchain into $THEOS/toolchain/.
+# ---------------------------------------------------------------------------
+# Theos needs a Linux cross-toolchain at $THEOS/toolchain/linux/iphone/bin. Cloning
+# theos + an SDK is NOT enough — without this, builds fail with:
+#   ".../theos/toolchain/linux/iphone/bin/clang: No such file or directory"
+TOOLCHAIN_DIR="$THEOS/toolchain/linux/iphone"
+if [[ -d "$TOOLCHAIN_DIR" ]] && [[ -n "$(ls -A "$TOOLCHAIN_DIR" 2>/dev/null)" ]]; then
+    echo "==> iOS toolchain already installed; skipping."
+else
+    ARCH="$(uname -m)"
+    if [[ "$ARCH" != "x86_64" && "$ARCH" != "aarch64" ]]; then
+        echo "WARNING: no prebuilt Theos toolchain is published for '$ARCH'." >&2
+        echo "         Install one manually into $THEOS/toolchain/." >&2
+    else
+        # Theos's own installer also offers a Swift-capable toolchain
+        # (kabiroberai/swift-toolchain-linux); we build Objective-C only, so the
+        # smaller non-Swift toolchain is what we want.
+        TC_URL="https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-$ARCH.tar.xz"
+        echo "==> Downloading the iOS cross-toolchain ($ARCH)..."
+        echo "    $TC_URL"
+        mkdir -p "$THEOS/toolchain"
+        curl -L --retry 3 "$TC_URL" | tar -xJ -C "$THEOS/toolchain/"
+        echo "==> Installed iOS toolchain into $THEOS/toolchain/."
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # 4. Final instructions / verification.
 # ---------------------------------------------------------------------------
 echo ""

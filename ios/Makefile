@@ -5,8 +5,8 @@ INSTALL_TARGET_PROCESSES = Walink
 APPLICATION_NAME = Walink
 Walink_FILES = $(wildcard Sources/*.m)
 Walink_FRAMEWORKS = UIKit CoreGraphics CoreImage
-Walink_CFLAGS = -fobjc-arc -I$(THEOS_PROJECT_DIR)/vendor
-Walink_LDFLAGS = -F$(THEOS_PROJECT_DIR)/vendor -framework NodeMobile -Wl,-rpath,@executable_path/Frameworks
+Walink_CFLAGS = -fobjc-arc -I$(THEOS_PROJECT_DIR)/../vendor
+Walink_LDFLAGS = -F$(THEOS_PROJECT_DIR)/../vendor -framework NodeMobile -Wl,-rpath,@executable_path/Frameworks
 Walink_RESOURCE_DIRS = Resources
 Walink_CODESIGN_FLAGS = -S$(THEOS_PROJECT_DIR)/Walink.entitlements
 
@@ -18,7 +18,7 @@ include $(THEOS_MAKE_PATH)/application.mk
 # can resolve @rpath/NodeMobile.framework/NodeMobile at launch.
 before-package::
 	mkdir -p "$(THEOS_STAGING_DIR)/Applications/Walink.app/Frameworks"
-	cp -R "$(THEOS_PROJECT_DIR)/vendor/NodeMobile.framework" "$(THEOS_STAGING_DIR)/Applications/Walink.app/Frameworks/"
+	cp -R "$(THEOS_PROJECT_DIR)/../vendor/NodeMobile.framework" "$(THEOS_STAGING_DIR)/Applications/Walink.app/Frameworks/"
 
 # On the jailbroken device: ad-hoc sign the embedded framework dylib, refresh the
 # SpringBoard icon cache for /Applications, then restart Walink so the new build runs.

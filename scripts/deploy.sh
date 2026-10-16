@@ -31,9 +31,7 @@ USB_DEVICE_SSH_PORT="${USB_DEVICE_SSH_PORT:-22}"
 
 REMOTE_DEB="/var/mobile/walink.deb"
 
-echo "==> Deploying to device via USB proxy"
-echo "    Local proxy port: $DEVICE_SSH_PORT -> device port $USB_DEVICE_SSH_PORT"
-echo "    SSH user:         $DEVICE_SSH_USER"
+echo "==> Deploying Walink to device ($DEVICE_SSH_HOST:$DEVICE_SSH_PORT)"
 
 # ---------------------------------------------------------------------------
 # 2. Verify helpers exist.
@@ -91,10 +89,10 @@ sleep 1
 # ---------------------------------------------------------------------------
 # 4. Find the newest .deb package.
 # ---------------------------------------------------------------------------
-DEB="$(find packages -maxdepth 1 -name '*.deb' -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n1 | cut -d' ' -f2-)"
+DEB="$(find ios/packages packages -maxdepth 1 -name '*.deb' -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n1 | cut -d' ' -f2- || true)"
 
 if [[ -z "$DEB" || ! -f "$DEB" ]]; then
-    echo "ERROR: No .deb package found in packages/. Run ./scripts/build.sh first." >&2
+    echo "ERROR: No .deb package found in ios/packages/. Run ./scripts/build.sh first." >&2
     exit 1
 fi
 
@@ -104,10 +102,12 @@ echo "==> Using package: $DEB"
 # 5. Copy the .deb to the device.
 # ---------------------------------------------------------------------------
 SSH_OPTS=(-p "$DEVICE_SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+# scp uses -P (capital) for the port; lowercase -p means "preserve timestamps".
+SCP_OPTS=(-P "$DEVICE_SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
 DEVICE_ADDR="$DEVICE_SSH_USER@$DEVICE_SSH_HOST"
 
 echo "==> Copying $DEB to device ($REMOTE_DEB)..."
-run_scp "${SSH_OPTS[@]}" "$DEB" "$DEVICE_ADDR:$REMOTE_DEB"
+run_scp "${SCP_OPTS[@]}" "$DEB" "$DEVICE_ADDR:$REMOTE_DEB"
 
 # ---------------------------------------------------------------------------
 # 6. Install and respring / refresh the app.
