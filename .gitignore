@@ -1,0 +1,18 @@
+# node / engine
+node_modules/
+engine/node_modules/
+npm-debug.log*
+
+# vendored iOS runtime (produced by CI, fetched by scripts/fetch-runtime.sh)
+vendor/
+
+# theos build output
+.theos/
+packages/
+*.deb
+
+# generated launch images
+ios/Resources/Launch-*.png
+
+# misc
+.DS_Store

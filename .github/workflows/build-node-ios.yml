@@ -1,0 +1,80 @@
+name: build-node-ios
+
+# Builds nodejs-mobile's NodeMobile.framework for iOS 12 (device, arm64) on a free
+# GitHub macOS runner, then uploads it as an artifact for scripts/fetch-runtime.sh.
+on:
+  workflow_dispatch:
+    inputs:
+      jit:
+        description: "Build V8 with JIT (jailbroken-only; faster, not App-Store legal)"
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "runtime-*"
+    paths:
+      - ".github/workflows/build-node-ios.yml"
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 350
+    steps:
+      - name: Checkout nodejs-mobile
+        uses: actions/checkout@v4
+        with:
+          repository: nodejs-mobile/nodejs-mobile
+          ref: main
+          path: nodejs-mobile
+          submodules: false
+
+      - name: Install cmake
+        run: brew install cmake || true
+
+      - name: Cache build
+        uses: actions/cache@v4
+        with:
+          path: |
+            nodejs-mobile/out
+            nodejs-mobile/tools/ios-framework/bin
+          key: ${{ runner.os }}-node18-arm64-jit${{ inputs.jit }}-v1
+
+      # The ONLY reason the stock framework needs iOS 13 is this pbxproj value.
+      - name: Target iOS 12.0
+        working-directory: nodejs-mobile
+        run: |
+          set -e
+          PBX=tools/ios-framework/NodeMobile.xcodeproj/project.pbxproj
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/IPHONEOS_DEPLOYMENT_TARGET = 12.0;/g' "$PBX"
+          grep -c "IPHONEOS_DEPLOYMENT_TARGET = 12.0;" "$PBX"
+
+      - name: Build framework (jitless, default)
+        if: ${{ !inputs.jit }}
+        working-directory: nodejs-mobile
+        run: ./tools/ios_framework_prepare.sh arm64
+
+      - name: Build framework (JIT)
+        if: ${{ inputs.jit }}
+        working-directory: nodejs-mobile
+        run: |
+          set -e
+          sed -i '' 's/--v8-options=--jitless//' tools/ios_framework_prepare.sh
+          ./tools/ios_framework_prepare.sh arm64
+
+      - name: Collect artifact
+        working-directory: nodejs-mobile
+        run: |
+          set -e
+          FR=out_ios_arm64/iphoneos-arm64/Release-iphoneos/NodeMobile.framework
+          test -d "$FR" || { echo "framework missing at $FR"; find . -name NodeMobile.framework; exit 1; }
+          mkdir -p "$GITHUB_WORKSPACE/artifact"
+          cp -R "$FR" "$GITHUB_WORKSPACE/artifact/"
+          echo "--- Info.plist ---"
+          /usr/libexec/PlistBuddy -c "Print" "$FR/Info.plist"
+
+      - name: Upload framework
+        uses: actions/upload-artifact@v4
+        with:
+          name: NodeMobile-ios-arm64${{ inputs.jit && '-jit' || '' }}
+          path: artifact/NodeMobile.framework
+          retention-days: 90
