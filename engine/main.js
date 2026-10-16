@@ -1,14 +1,27 @@
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { appendFileSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
-import makeWASocket, {
+
+// @whiskeysockets/baileys ships CommonJS only: lib/index.js sets `__esModule` and
+// `exports.default = makeWASocket`. Under ESM, `import makeWASocket from '<cjs>'` binds the
+// whole `module.exports` object rather than the function (which is why calling it throws
+// "makeWASocket is not a function"), and leaning on cjs-module-lexer to surface the
+// re-exported names (`useMultiFileAuthState`, `getContentType`, ...) is brittle across Node
+// versions. `createRequire` hands back the real CJS exports object — exactly how Baileys is
+// meant to be consumed.
+const require = createRequire(import.meta.url);
+const Baileys = require('@whiskeysockets/baileys');
+
+const makeWASocket = Baileys.makeWASocket ?? Baileys.default;
+const {
   DisconnectReason,
   fetchLatestBaileysVersion,
   getContentType,
   useMultiFileAuthState,
-} from '@whiskeysockets/baileys';
+} = Baileys;
 
 const PORT = parseInt(process.env.WALINK_PORT, 10) || 8787;
 const DATA_DIR = process.env.WALINK_DATA_DIR || path.join(os.homedir(), '.walink');

@@ -309,3 +309,19 @@ Decision (user): stop waiting on CI, use the only prebuilt that loads on iOS 12.
   new `uncaughtException` hook) into `<Documents>/.walink/engine.log`, rotating once at 512 KB, and
   serves it as `GET /api/log?tail=N`. New helper `scripts/engine-log.sh [lines]` reads it over the
   USB tunnel.
+
+### Day 1 (cont.) — First real engine errors (the on-device log paid off immediately)
+- The engine started, served HTTP and retried every 2 s with
+  `TypeError: makeWASocket is not a function` (engine/main.js, `connect`).
+- Cause: **@whiskeysockets/baileys is CommonJS-only.** `lib/index.js` does
+  `Object.defineProperty(exports, "__esModule", ...)` and `exports.default = Socket_1.default`, so
+  under ESM `import makeWASocket from '@whiskeysockets/baileys'` binds the whole `module.exports`
+  object, not the function. This was a latent bug in the engine from the beginning — it was simply
+  unreachable until now, because the app always died in dyld first.
+- Fix: `engine/main.js` uses `createRequire(import.meta.url)` and reads the real CJS exports
+  (`const makeWASocket = Baileys.makeWASocket ?? Baileys.default`). This avoids depending on
+  cjs-module-lexer's detection of the `__exportStar` re-exports (`useMultiFileAuthState`,
+  `getContentType`, `DisconnectReason`, ...), which is Node-version sensitive. Verified on the host:
+  all five bindings resolve and `makeWASocket` is a function.
+- Also confirmed Node 16.17.1 accepts `--experimental-global-webcrypto`: an unknown option would
+  make Node exit immediately, and the engine boots and serves HTTP with it in argv.
