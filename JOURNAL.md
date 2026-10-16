@@ -74,3 +74,11 @@ calling does not work in the user's country anyway).
 1. Land engine/ios/scripts, review for consistency with the API contract.
 2. Commit + push as striker91n.
 3. Manually trigger `build-node-ios.yml`; fetch artifact; bootstrap Theos; build; deploy; test QR link.
+
+### Day 1 (cont.) — CI debugging & JIT
+- CI run `38930819780` (jitless) failed in 36s: `ModuleNotFoundError: No module named 'distutils'`.
+  Cause: macOS runner Python **3.12** removed `distutils`; Node 18 `configure.py` imports `StrictVersion`.
+  Runner Xcode = 15.4. **Fix:** added `actions/setup-python@v5` → **3.11**, and replaced
+  `getconf _NPROCESSORS_ONLN` with `sysctl -n hw.ncpu` in the prepare script.
+- User decision: **ship the JIT build.** Workflow `jit` input now defaults to `true`. Re-triggered as
+  run `38930981133` (cancelled/replaced after the Python fix).

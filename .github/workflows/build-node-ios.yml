@@ -28,6 +28,11 @@ jobs:
           path: nodejs-mobile
           submodules: false
 
+      - name: Set up Python 3.11 (Node 18 configure.py imports distutils; gone in 3.12)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install cmake
         run: brew install cmake || true
 
@@ -47,6 +52,8 @@ jobs:
           PBX=tools/ios-framework/NodeMobile.xcodeproj/project.pbxproj
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/IPHONEOS_DEPLOYMENT_TARGET = 12.0;/g' "$PBX"
           grep -c "IPHONEOS_DEPLOYMENT_TARGET = 12.0;" "$PBX"
+          # macOS getconf does not reliably support _NPROCESSORS_ONLN
+          sed -i '' 's/getconf _NPROCESSORS_ONLN/sysctl -n hw.ncpu/g' tools/ios_framework_prepare.sh
 
       - name: Build framework (jitless, default)
         if: ${{ !inputs.jit }}
