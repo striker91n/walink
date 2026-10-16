@@ -248,7 +248,8 @@
 
         NSString *type = event[@"type"];
         if ([type isEqualToString:@"qr"]) {
-            NSString *qrString = event[@"qr"];
+            id qrValue = event[@"qr"];
+            NSString *qrString = [qrValue isKindOfClass:[NSString class]] ? qrValue : nil;
             if (qrString.length > 0) {
                 self.qrImageView.image = [self qrImageFromString:qrString size:CGSizeMake(260.0, 260.0)];
             }
@@ -282,8 +283,14 @@
             }
         } else if ([type isEqualToString:@"message"]) {
             NSDictionary *message = event[@"message"];
-            NSString *senderName = message[@"pushName"] ?: message[@"jid"];
-            NSString *text = message[@"text"] ?: @"";
+            // pushName/text can arrive as JSON null (NSNull), and `?:` does NOT fall back on
+            // NSNull — it would print "<null>" into the log.
+            id nameValue = message[@"pushName"];
+            id jidValue = message[@"jid"];
+            NSString *senderName = [nameValue isKindOfClass:[NSString class]] ? nameValue
+                                 : ([jidValue isKindOfClass:[NSString class]] ? jidValue : nil);
+            id textValue = message[@"text"];
+            NSString *text = [textValue isKindOfClass:[NSString class]] ? textValue : @"";
             [self appendLog:[NSString stringWithFormat:@"%@: %@", senderName ?: @"unknown", text]];
         }
     }
@@ -293,15 +300,25 @@
 
 - (void)updateStatusLabel
 {
-    NSString *userName = self.currentUser[@"name"] ?: self.currentUser[@"id"];
+    // `name`/`id` may be absent or JSON null; only use them when they really are strings,
+    // otherwise -length on an NSNull would throw.
+    id nameValue = self.currentUser[@"name"];
+    id idValue = self.currentUser[@"id"];
+    NSString *userName = [nameValue isKindOfClass:[NSString class]] ? nameValue
+                        : ([idValue isKindOfClass:[NSString class]] ? idValue : nil);
+
+    // A QR is only scannable while we are waiting to be linked. Once the socket moves to
+    // connecting/close the old code is dead (WhatsApp will reject it), so never leave it on
+    // screen: the engine clears state.qr, but the UI only sees events and never reads
+    // /api/state, so the image must be cleared here.
+    if (![self.connectionState isEqualToString:@"open"]) {
+        self.qrImageView.image = nil;
+    }
 
     if ([self.connectionState isEqualToString:@"open"]) {
-        if (userName.length > 0) {
-            self.statusLabel.text = [NSString stringWithFormat:@"Connected as %@", userName];
-        } else {
-            self.statusLabel.text = @"Connected";
-        }
-        self.qrImageView.image = nil;
+        self.statusLabel.text = userName.length > 0
+            ? [NSString stringWithFormat:@"Connected as %@", userName]
+            : @"Connected";
     } else if ([self.connectionState isEqualToString:@"connecting"]) {
         self.statusLabel.text = @"Connecting…";
     } else if ([self.connectionState isEqualToString:@"close"]) {

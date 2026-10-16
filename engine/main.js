@@ -91,6 +91,7 @@ const state = {
   saveCreds: null,
   sock: null,
   reconnectTimer: null,
+  reconnectAttempts: 0,
   baileysVersion: null,
 };
 
@@ -281,7 +282,7 @@ function onMessagesUpsert({ messages, type }) {
   }
 }
 
-function onConnectionUpdate(update) {
+async function onConnectionUpdate(update) {
   try {
     const { qr, connection, lastDisconnect } = update;
 
@@ -300,6 +301,7 @@ function onConnectionUpdate(update) {
       state.connecting = false;
       state.connected = true;
       state.qr = null;
+      state.reconnectAttempts = 0; // a healthy connection clears the backoff
       state.user = state.sock?.user ?? null;
       log(`connection: open (user=${state.user?.id ?? 'unknown'})`);
       addEvent({ type: 'connection', state: 'open', user: state.user, code: null, loggedOut: false });
@@ -309,11 +311,27 @@ function onConnectionUpdate(update) {
       state.qr = null;
       const code = lastDisconnect?.error?.output?.statusCode ?? null;
       const loggedOut = code === DisconnectReason.loggedOut;
-      logErr(`connection: closed (code=${code}, ${loggedOut ? 'logged out' : 'will reconnect'})`);
-      addEvent({ type: 'connection', state: 'close', user: null, code, loggedOut });
-      if (!loggedOut) {
-        scheduleReconnect();
+
+      // 401 logged-out and 500 bad-session leave credentials that can only fail the same way
+      // again, so wipe them: the next connect() then starts a fresh pairing and emits a new QR.
+      if (loggedOut || code === DisconnectReason.badSession) {
+        logErr(`connection: closed (code=${code}) — clearing credentials so a new QR can be issued`);
+        await clearAuthState();
+      } else if (code === DisconnectReason.forbidden) {
+        // 403: WhatsApp refused this number. Nothing to clear; it will not fix itself.
+        logErr('connection: closed (403 forbidden) — this number appears blocked from linking');
+      } else if (code === DisconnectReason.connectionReplaced) {
+        // 440: another companion (or a second engine) took the session over.
+        logErr('connection: closed (440) — another companion replaced this session');
+      } else {
+        logErr(`connection: closed (code=${code}; reconnecting)`);
       }
+
+      addEvent({ type: 'connection', state: 'close', user: null, code, loggedOut });
+
+      // This app has no other recovery path than retrying, so always retry — but with backoff, so
+      // a persistent failure (403/440/500) cannot hammer WhatsApp every 2 s indefinitely.
+      scheduleReconnect();
     }
   } catch (err) {
     logErr('connection.update handler failed:', err);
@@ -322,10 +340,16 @@ function onConnectionUpdate(update) {
 
 function scheduleReconnect() {
   if (state.reconnectTimer) return;
+  const attempt = ++state.reconnectAttempts;
+  // 2 s, 4 s, 8 s … capped at 30 s. Normal 428/515 reconnects land on the first, fast step.
+  const delay = Math.min(2000 * 2 ** (attempt - 1), 30_000);
+  if (attempt > 1) {
+    log(`reconnect attempt ${attempt} in ${delay} ms`);
+  }
   state.reconnectTimer = setTimeout(() => {
     state.reconnectTimer = null;
     connect();
-  }, 2000);
+  }, delay);
 }
 
 function cancelReconnect() {
@@ -333,6 +357,38 @@ function cancelReconnect() {
     clearTimeout(state.reconnectTimer);
     state.reconnectTimer = null;
   }
+}
+
+const VERSION_FETCH_TIMEOUT_MS = 8_000;
+
+// Resolve the Baileys protocol version without ever letting a network fetch stall connect().
+// fetchLatestBaileysVersion() uses axios with no timeout, so on a phone whose route or DNS is
+// black-holed it never settles: connect() then stays suspended with no 'connecting' event and no
+// reconnect timer, while the UI sits on "Starting engine…" forever.
+//
+// Only a genuinely fresh answer is cached. On timeout we return undefined, which lets makeWASocket
+// use the version bundled with Baileys for this attempt, and the next connect() retries the fetch —
+// caching a fallback for the process lifetime would pin a stale protocol version (WhatsApp answers
+// 405 to outdated clients).
+async function resolveBaileysVersion() {
+  if (state.baileysVersion) return state.baileysVersion;
+
+  try {
+    const fetched = await Promise.race([
+      fetchLatestBaileysVersion(),
+      new Promise((resolve) => setTimeout(() => resolve(null), VERSION_FETCH_TIMEOUT_MS).unref()),
+    ]);
+
+    if (fetched && fetched.isLatest && Array.isArray(fetched.version)) {
+      state.baileysVersion = fetched.version;
+      log(`using fetched Baileys version ${fetched.version.join('.')}`);
+      return state.baileysVersion;
+    }
+    log('version endpoint did not answer in time; using the version bundled with Baileys');
+  } catch (err) {
+    logErr('version fetch failed:', err);
+  }
+  return undefined;
 }
 
 async function connect() {
@@ -354,15 +410,11 @@ async function connect() {
       state.saveCreds = saveCreds;
     }
 
-    // Cache the Baileys version: fetching it hits the network, which is slow/absent on
-    // a phone right after boot. If the fetch fails, the outer catch reconnects.
-    if (!state.baileysVersion) {
-      const fetched = await fetchLatestBaileysVersion();
-      state.baileysVersion = fetched.version;
-    }
-    const version = state.baileysVersion;
+    const version = await resolveBaileysVersion();
     const sock = makeWASocket({
-      version,
+      // Only spread `version` when we actually resolved one: passing an explicit `undefined`
+      // would override the default that Baileys itself falls back to.
+      ...(version ? { version } : {}),
       auth: state.authState,
       printQRInTerminal: false,
       browser: ['Walink', 'Chrome', '1.0.0'],
@@ -380,15 +432,10 @@ async function connect() {
   }
 }
 
-async function logout() {
-  cancelReconnect();
-  if (state.sock?.logout) {
-    try {
-      await state.sock.logout();
-    } catch (err) {
-      logErr('logout failed:', err);
-    }
-  }
+// Detach listeners, drop the in-memory credentials and delete them from disk, so the next
+// connect() performs a brand-new pairing and therefore emits a fresh QR. Used by logout() and
+// when WhatsApp tells us the session is unusable (401 logged-out / 500 bad-session).
+async function clearAuthState() {
   try {
     if (state.sock?.ev) {
       state.sock.ev.removeAllListeners('connection.update');
@@ -411,6 +458,18 @@ async function logout() {
   } catch (err) {
     logErr('failed to clear auth directory:', err);
   }
+}
+
+async function logout() {
+  cancelReconnect();
+  if (state.sock?.logout) {
+    try {
+      await state.sock.logout();
+    } catch (err) {
+      logErr('logout failed:', err);
+    }
+  }
+  await clearAuthState();
   addEvent({ type: 'connection', state: 'close', user: null, code: DisconnectReason.loggedOut, loggedOut: true });
 }
 

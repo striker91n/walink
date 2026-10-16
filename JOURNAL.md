@@ -411,3 +411,33 @@ already validated for tool-calling — with `opencode-go/claude-haiku-5-5` as th
   frozen first value.
 - Added `scripts/show-qr.sh`: renders the QR in the terminal and re-renders in place whenever
   WhatsApp rotates it, exiting as soon as the device reports `connected`.
+
+### Day 1 (cont.) — Robustness fixes from the flow audit (pre-link hardening)
+A read-only audit of the link path (second attempt, on `claude-haiku-5-5`, after the first agent burned
+its step budget) found these; we fixed the top five:
+- **Stale QR stayed on screen (HIGH).** The engine clears `state.qr` on close, but the UI only draws
+  from the event stream and cleared the image *only* on `open`, so after a disconnect the last (now
+  invalid) code stayed scannable and WhatsApp would reject it. `WLHomeViewController` now clears the QR
+  whenever the state is not `open`.
+- **Boot with no network could wedge the engine (HIGH).** `fetchLatestBaileysVersion()` uses axios with
+  no timeout; on a black-holed route/DNS the `await` never settles, so `connect()` hangs with no
+  `connecting` event and no reconnect timer while the UI sits on "Starting engine…". It now races an
+  8 s timer (`.unref()`), and only a *fresh* answer is cached: on timeout we omit `version` entirely so
+  `makeWASocket` applies Baileys' own bundled default, and the next attempt retries the fetch (never
+  pinning a stale protocol version, which WhatsApp answers with 405).
+- **401/500 left dead credentials (MED).** `loggedOut` (401) and `badSession` (500) now wipe the auth
+  directory and in-memory creds through a new `clearAuthState()` (also used by `logout()`), so the next
+  `connect()` starts a fresh pairing and emits a new QR instead of looping on unusable keys.
+- **Unbounded fixed-delay reconnect (MED).** 440 `connectionReplaced`, 403 `forbidden` and 500 were not
+  special-cased and retried every 2 s forever. `scheduleReconnect()` now backs off 2→4→8 … capped at
+  30 s (reset on `open`) and logs the attempt, so a permanent failure cannot hammer WhatsApp.
+- **NSNull hazards in the UI (LOW).** `message.pushName`/`text` printed as `<null>` (because `?:` does
+  not fall back on `NSNull`) and `user.name` could throw on `-length`; both now use
+  `isKindOfClass:` checks.
+- **Cleared by the audit (no action needed):** the long-poll does **not** block the serial
+  `requestQueue` and there is no self-deadlock (each request returns as soon as its data task is
+  resumed; only `waitForReady` blocks the queue). Reconnects are armed only from a close on the current
+  socket, so two sockets never overlap in the normal flow.
+- The audit could not verify Baileys' `fetchLatestBaileysVersion` error behaviour (node_modules were
+  out of scope); we checked it directly afterwards — it returns the bundled default with
+  `isLatest: false` rather than throwing, which is why the new resolver keys off `isLatest`.
