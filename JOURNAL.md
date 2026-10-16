@@ -441,3 +441,30 @@ its step budget) found these; we fixed the top five:
 - The audit could not verify Baileys' `fetchLatestBaileysVersion` error behaviour (node_modules were
   out of scope); we checked it directly afterwards — it returns the bundled default with
   `isLatest: false` rather than throwing, which is why the new resolver keys off `isLatest`.
+
+### Day 1 (cont.) — Why the CI never got faster: the cache was never written
+Run 38931568114 failed, and the reason it always took ~50 minutes turned out to be the cache, not the
+compiler. `gh api .../actions/caches` showed **zero cache entries**, so every run was a cold build that
+died on the 7 GB runner and left the next run to start from zero again. Three causes, all fixed:
+1. **The prepare script wipes the tree.** `tools/ios_framework_prepare.sh` runs `make clean` before
+   *each* target and does `rm -rf out_ios_$1` in `set_framework_target_dir()`, so even a restored
+   cache was deleted seconds after being restored. Both lines are now stripped by the workflow.
+2. **The save could not succeed.** The configured cache paths may not exist yet at save time, and
+   `tar` then exits 2 — exactly the `gtar failed with error: exit code 2` annotation we saw. The
+   directories are now created before the restore, and the cached set is the tree that actually costs
+   the time (`out/`, where `make -j` compiles Node/V8) plus the xcodebuild output and the libs staged
+   for the Xcode project.
+3. **The 10 GB budget silently rejects saves once full.** Superseded entries are now pruned after each
+   run (keeping the two newest), so a full budget cannot quietly turn every save into a failure.
+- The iOS-12 patch moved to **`common.gypi`**, which is where the deployment target actually reaches
+  the compiler: it reads `'IPHONEOS_DEPLOYMENT_TARGET': '13.0',  # -miphoneos-version-min=13.0`.
+  Patching only the Xcode project could never change the object files, which is why all 1278 compile
+  lines stayed at 13.0 and why the framework imported `___chkstk_darwin`.
+- Added a **verify step** that fails the build if the framework imports `___chkstk_darwin` and prints
+  the compiled-in `minos` plus the baked-in `node_v8_options`, so a useless artifact cannot be
+  uploaded again; per-step timeouts (150 min) instead of running until the runner dies; and a
+  `concurrency` group so two runs cannot fight over the same cache key.
+- Expectation: the **first** run is still ~50 min (nothing to restore yet). From the second run on,
+  `out/` is restored and the build is incremental — and because the cache is saved even on failure, a
+  run that dies now resumes rather than restarting. The device is unaffected either way: it runs the
+  v16.17.1 prebuilt, and CI exists only for the optional JIT runtime.
