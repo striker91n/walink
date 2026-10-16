@@ -260,3 +260,24 @@ A read-only audit subagent (`glm-5.3-flash-free`) reviewed `engine/` and `ios/So
   `setTimeout(() => process.exit(0), 1000).unref()`.
 - Cleared by the audit (no action): no iOS 13+ APIs, no retain cycles, no ATS problem for loopback
   HTTP on iOS 12, timeout chain consistent (25 s poll < 30 s client < 300 s resource).
+
+### Day 1 (cont.) — Root cause of `___chkstk_darwin` pinned down
+- Upstream **LLVM 11** (our Theos toolchain) has no Darwin stack probe at all: its
+  `AArch64FrameLowering.cpp` only probes for **Windows** (`__chkstk`, `windowsRequiresStackProbe`).
+  That is why clang 11 cannot reproduce the symbol.
+- Current LLVM `main` lowers a **dynamic `alloca`** through
+  `AArch64TargetLowering::LowerDYNAMIC_STACKALLOC` → `hasInlineStackProbe(MF)` → an *inline* probe
+  loop (`LowerInlineDYNAMIC_STACKALLOC` / `PROBED_STACKALLOC`); the libcall path
+  (`RTLIB::STACK_PROBE` → `getLibcallImplName`) still exists and resolves to **`___chkstk_darwin`**
+  on Darwin. So the import comes from V8 functions with a runtime-sized stack allocation.
+- **clang 23 rejects the flag outright on Darwin**: `-fstack-clash-protection` →
+  `warning: argument unused during compilation`. So on Darwin the probe choice is Apple's clang
+  behaviour, gated on the deployment target: include iOS 13 → call `___chkstk_darwin`; target
+  iOS 12 → inline probe. That is exactly why a prebuilt declared as min 13.0 imports it and why
+  lowering only the *declared* minimum (patch-framework.py) cannot fix it — the import is baked
+  into the code. It also means a **true min-12.0 rebuild should be clean**, which is what the CI's
+  patched build does (its `jitless` step finished successfully on run 38931568114).
+- `scripts/fetch-runtime.sh` now **refuses to install a runtime that imports `___chkstk_darwin`**
+  (loud, actionable error) instead of silently shipping a framework that aborts in dyld. It also
+  takes `NODEJS_MOBILE_TAG`/`NODEJS_MOBILE_ASSET` (the 16.x tags are prefixed:
+  `nodejs-mobile-v16.17.1`) and locates the arm64 device slice by `find` instead of a fixed path.
