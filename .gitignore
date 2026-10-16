@@ -14,6 +14,9 @@ packages/
 # generated launch images
 ios/Resources/Launch-*.png
 
+# generated iOS bundle resources (engine copy, launch images)
+ios/Resources/engine/
+
 # local secrets (device SSH password, etc.)
 scripts/device.env
 

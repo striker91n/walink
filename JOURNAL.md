@@ -151,3 +151,25 @@ calling does not work in the user's country anyway).
   listens on the network interface, not just USB). Host-specific details (UDID, serial, IP,
   password) are kept **only** in the gitignored `scripts/device.env` — never in this public repo.
 - CI run `38931568114` still compiling at ~8 min.
+
+### Day 1 (cont.) — Build speed: patch the prebuilt instead of compiling
+- **Biggest win.** The official prebuilt `nodejs-mobile-v18.20.4-ios.zip` device slice declares
+  `MinimumOSVersion 13.0` and `LC_BUILD_VERSION minos 13.0`, but it links only
+  `libc++`/`CoreFoundation`/`libSystem` — the 13.0 is a *declaration*, not an API requirement.
+  Added **`scripts/patch-framework.py`** (pure Python; rewrites the Mach-O `LC_BUILD_VERSION.minos`
+  and `Info.plist` `MinimumOSVersion`). `scripts/fetch-runtime.sh` now defaults to
+  download → patch → `ldid -S` re-sign: **~3 s instead of a ~30-min V8 compile**. The CI/JIT path
+  is still there via `SOURCE=ci`.
+- CI-side speedups: nodejs-mobile pinned to `v18.20.4` (cache stays valid), `make clean` removed,
+  `nodejs-mobile/out` + `tools/ios-framework/bin` cached, `brew install cmake` skipped when present.
+- **Toolchain ready:** Theos at `/home/axies/theos` with `iPhoneOS12.4.sdk`; clang/lld 23.1.1;
+  `ldid` 2.1.5-procursus7. Note: `ldid` is **not in the Arch repos** (AUR only) — fixed
+  `bootstrap-theos.sh` to keep it out of the pacman list and try `paru`/`yay` instead.
+- **Engine deps:** `npm install` only succeeds with **`allow-git=all`** (npm 12 blocks git deps by
+  default); added `engine/.npmrc`. 231 packages / 117 MB.
+- **Security note (needs a decision):** npm flags `@whiskeysockets/baileys@6.17.16` as affected by a
+  message-spoofing advisory (GHSA-qvv5-jq5g-4cgg) whose fixes are **6.7.22+ / 7.0.0-rc12+**. But
+  every fixed version declares `engines.node >= 20.0.0`, and nodejs-mobile's newest *release* is
+  Node 18.20.4. nodejs-mobile does have an unreleased **`update22-9-0`** branch (Node 22.9.0) that we
+  could build in CI. Options: (a) keep Node 18 + vulnerable Baileys (fast, burner number),
+  (b) build Node 22 from that branch + fixed Baileys (slow/experimental).

@@ -73,41 +73,43 @@ vendor/                                NodeMobile.framework lands here (git-igno
   SSH listens on port **22** (default root password `alpine` — change it).
   See **[docs/device-setup.md](docs/device-setup.md)** for the full device checklist.
 
-### 1. Build the iOS 12 Node runtime (GitHub macOS runner)
+### 1. Get the iOS 12 Node runtime into `vendor/` (seconds, no compile)
 
 ```sh
-gh workflow run build-node-ios.yml          # free: public repo, macOS minutes are free
-gh run watch                                # or: gh run list --workflow build-node-ios.yml
+./scripts/fetch-runtime.sh
 ```
 
-This checks out nodejs-mobile, patches `IPHONEOS_DEPLOYMENT_TARGET` 13.0 → 12.0, builds the
-arm64 device framework, and uploads artifact **`NodeMobile-ios-arm64`**.
+Downloads the official prebuilt `NodeMobile.xcframework` and lowers its declared minimum iOS
+version to **12.0** with `scripts/patch-framework.py` (both `Info.plist` and the Mach-O
+`LC_BUILD_VERSION`). The published framework declares `13.0` as a *build setting* only — the dylib
+links nothing newer than `libc++`/`CoreFoundation`/`libSystem` — so patching it beats recompiling
+V8. **~3 s instead of ~30 min.**
 
-Optionally, a JIT-enabled build (`--jitless` removed) is faster on a jailbroken device:
+The prebuilt is the official `--jitless` build. For **JIT** (faster JS on the A8) you must compile
+once, but the workflow caches the build so repeat runs are incremental:
 
 ```sh
-gh workflow run build-node-ios.yml -f jit=true
+gh workflow run build-node-ios.yml -f jit=true   # free macOS minutes on a public repo
+SOURCE=ci ./scripts/fetch-runtime.sh             # downloads artifact NodeMobile-ios-arm64-jit
 ```
 
-### 2. Fetch the runtime into `vendor/`
+Speed notes: nodejs-mobile is pinned to `v18.20.4`, `make clean` is removed, and
+`nodejs-mobile/out` + `tools/ios-framework/bin` are cached — so the second JIT build reuses
+everything.
 
-```sh
-./scripts/fetch-runtime.sh        # wraps: gh run download -n NodeMobile-ios-arm64
-```
-
-### 3. Install Theos (Linux)
+### 2. Install Theos (Linux)
 
 ```sh
 ./scripts/bootstrap-theos.sh
 ```
 
-### 4. Build the .deb
+### 3. Build the .deb
 
 ```sh
-./scripts/build.sh                # -> packages/com.striker91n.walink_*.deb
+./scripts/build.sh                # -> ios/packages/com.striker91n.walink_*.deb
 ```
 
-### 5. Install on the device over USB
+### 4. Install on the device over USB
 
 ```sh
 ./scripts/deploy.sh               # iproxy 2222:22, scp, dpkg -i, ldid, uicache
@@ -119,6 +121,7 @@ device). The bridge is now a companion device; the iPhone talks to it locally.
 ## Roadmap
 
 - [x] CI builds an **iOS 12** Node.js 18 arm64 framework (the whole reason for this repo)
+- [x] Prebuilt runtime **patched to iOS 12** locally (no compile needed; ~3 s)
 - [x] Theos app boots embedded Node and reaches it over loopback
 - [x] QR link flow + send text
 - [ ] Chat list, message history, bubbles (native store)

@@ -13,7 +13,7 @@ echo "==> Bootstrapping Theos into: $THEOS"
 # ---------------------------------------------------------------------------
 # 1. Detect package manager and install prerequisites.
 # ---------------------------------------------------------------------------
-PKGS=(git make clang lld ldid dpkg xz perl fakeroot)
+PKGS=(git make clang lld dpkg xz perl fakeroot)
 
 if command -v pacman >/dev/null 2>&1; then
     echo "==> Detected pacman (Arch-family). Will install: ${PKGS[*]}"
@@ -23,8 +23,8 @@ if command -v pacman >/dev/null 2>&1; then
         pacman -S --needed --noconfirm "${PKGS[@]}"
     fi
 elif command -v apt-get >/dev/null 2>&1; then
-    # Debian/Ubuntu: xz is split into xz-utils.
-    DEB_PKGS=(git make clang lld ldid dpkg xz-utils perl fakeroot)
+    # Debian/Ubuntu: xz is split into xz-utils; ldid is not in the distro repos.
+    DEB_PKGS=(git make clang lld dpkg xz-utils perl fakeroot)
     echo "==> Detected apt-get (Debian/Ubuntu). Will install: ${DEB_PKGS[*]}"
     if [[ "$EUID" -ne 0 ]]; then
         sudo apt-get update
@@ -35,9 +35,30 @@ elif command -v apt-get >/dev/null 2>&1; then
     fi
 else
     echo "WARNING: No supported package manager found (looked for pacman, apt-get)."
-    echo "         Please install these packages manually: ${PKGS[*]}"
+    echo "         Please install these packages manually: ${PKGS[*]} ldid"
     echo "         Continuing anyway..."
 fi
+
+# `ldid` signs the built binaries. It is NOT in the official Arch or Debian repos (on
+# Arch it lives in the AUR), so it is intentionally kept out of the package lists above
+# and resolved here instead.
+if ! command -v ldid >/dev/null 2>&1; then
+    for helper in paru yay; do
+        if command -v "$helper" >/dev/null 2>&1; then
+            echo "==> ldid not found; installing the AUR package 'ldid' via $helper..."
+            "$helper" -S --needed --noconfirm ldid && break
+        fi
+    done
+fi
+
+if ! command -v ldid >/dev/null 2>&1; then
+    echo "ERROR: 'ldid' is required but was not found (it is not in the official repos)." >&2
+    echo "       Arch:   paru -S ldid   (or: yay -S ldid)" >&2
+    echo "       Debian: build https://github.com/ProcursusTeam/ldid from source" >&2
+    exit 1
+fi
+
+echo "==> Using ldid: $(command -v ldid) ($(ldid 2>&1 | head -1 || true))"
 
 # ---------------------------------------------------------------------------
 # 2. Clone Theos if it isn't already present.
