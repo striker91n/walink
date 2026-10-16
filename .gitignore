@@ -14,5 +14,8 @@ packages/
 # generated launch images
 ios/Resources/Launch-*.png
 
+# local secrets (device SSH password, etc.)
+scripts/device.env
+
 # misc
 .DS_Store

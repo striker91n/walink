@@ -36,10 +36,20 @@ In another shell, confirm you can log in:
 ssh root@127.0.0.1 -p 2222      # password: whatever you set above
 ```
 
-If you set a non-default password, tell `deploy.sh` about it:
+If you set a non-default password (or want to skip typing it), copy the example
+file and edit it — `scripts/device.env` is **gitignored**, so the secret never
+lands in the public repo: 
+
+```sh
+cp scripts/device.env.example scripts/device.env
+# then edit scripts/device.env and set DEVICE_SSH_PASS
+```
+
+You can also pass values inline:
 
 ```sh
 DEVICE_SSH_PASS='yourpassword' ./scripts/deploy.sh
+DEVICE_SSH_HOST=192.168.1.50 DEVICE_SSH_PORT=22 ./scripts/deploy.sh   # over Wi-Fi
 ```
 
 ## 4. Fakesigned apps

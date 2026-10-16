@@ -10,9 +10,20 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Optional local, gitignored overrides (e.g. DEVICE_SSH_PASS). This keeps the
+# device password out of a public repo. See scripts/device.env.example.
+if [[ -f "$REPO_ROOT/scripts/device.env" ]]; then
+    # shellcheck disable=SC1091
+    . "$REPO_ROOT/scripts/device.env"
+fi
+
 # ---------------------------------------------------------------------------
 # 1. Configuration (overridable via environment).
 # ---------------------------------------------------------------------------
+# Over USB, `iproxy` forwards a local port to the device's port 22, so we talk to
+# 127.0.0.1. Set DEVICE_SSH_HOST to the phone's Wi-Fi/LAN IP to deploy wirelessly
+# (no iproxy needed in that case).
+DEVICE_SSH_HOST="${DEVICE_SSH_HOST:-127.0.0.1}"
 DEVICE_SSH_PORT="${DEVICE_SSH_PORT:-2222}"
 DEVICE_SSH_USER="${DEVICE_SSH_USER:-root}"
 DEVICE_SSH_PASS="${DEVICE_SSH_PASS:-alpine}"
@@ -27,8 +38,10 @@ echo "    SSH user:         $DEVICE_SSH_USER"
 # ---------------------------------------------------------------------------
 # 2. Verify helpers exist.
 # ---------------------------------------------------------------------------
-if ! command -v iproxy >/dev/null 2>&1; then
-    echo "ERROR: iproxy not found. Install libimobiledevice / usbmuxd." >&2
+if [[ "$DEVICE_SSH_HOST" == "127.0.0.1" || "$DEVICE_SSH_HOST" == "localhost" ]] \
+   && ! command -v iproxy >/dev/null 2>&1; then
+    echo "ERROR: iproxy not found (required for USB deploys). Install libimobiledevice/usbmuxd," >&2
+    echo "       or set DEVICE_SSH_HOST to the device's Wi-Fi IP to deploy wirelessly." >&2
     exit 1
 fi
 
@@ -64,10 +77,14 @@ run_ssh() {
 # ---------------------------------------------------------------------------
 # 3. Start iproxy in the background and clean it up on exit.
 # ---------------------------------------------------------------------------
-echo "==> Starting iproxy $DEVICE_SSH_PORT $USB_DEVICE_SSH_PORT..."
-iproxy "$DEVICE_SSH_PORT" "$USB_DEVICE_SSH_PORT" >/tmp/walink-iproxy.log 2>&1 &
-IPROXY_PID=$!
-trap 'echo "==> Stopping iproxy (pid $IPROXY_PID)..."; kill "$IPROXY_PID" 2>/dev/null || true; wait "$IPROXY_PID" 2>/dev/null || true' EXIT
+if [[ "$DEVICE_SSH_HOST" == "127.0.0.1" || "$DEVICE_SSH_HOST" == "localhost" ]]; then
+    echo "==> Starting iproxy $DEVICE_SSH_PORT $USB_DEVICE_SSH_PORT (USB -> 127.0.0.1:$DEVICE_SSH_PORT)..."
+    iproxy "$DEVICE_SSH_PORT" "$USB_DEVICE_SSH_PORT" >/tmp/walink-iproxy.log 2>&1 &
+    IPROXY_PID=$!
+    trap 'echo "==> Stopping iproxy (pid $IPROXY_PID)..."; kill "$IPROXY_PID" 2>/dev/null || true; wait "$IPROXY_PID" 2>/dev/null || true' EXIT
+else
+    echo "==> Using SSH host $DEVICE_SSH_HOST:$DEVICE_SSH_PORT (over the network, no iproxy)."
+fi
 
 sleep 1
 
@@ -87,7 +104,7 @@ echo "==> Using package: $DEB"
 # 5. Copy the .deb to the device.
 # ---------------------------------------------------------------------------
 SSH_OPTS=(-p "$DEVICE_SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-DEVICE_ADDR="$DEVICE_SSH_USER@127.0.0.1"
+DEVICE_ADDR="$DEVICE_SSH_USER@$DEVICE_SSH_HOST"
 
 echo "==> Copying $DEB to device ($REMOTE_DEB)..."
 run_scp "${SSH_OPTS[@]}" "$DEB" "$DEVICE_ADDR:$REMOTE_DEB"
