@@ -34,6 +34,18 @@
     [self setupViews];
     [self updateStatusLabel];
 
+    // Surface a dead Node runtime instead of sitting at "Starting engine…" forever.
+    __weak typeof(self) weakSelf = self;
+    [WLEngine shared].startupFailureHandler = ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        if (strongSelf.connectionState.length == 0) {
+            strongSelf.statusLabel.text = @"Engine failed to start — check the log";
+        }
+        [strongSelf appendLog:@"[system] engine never became ready; the Node runtime may have failed to launch"];
+    };
+
     // Start the engine (idempotent) and begin the long-poll loop.
     [[WLEngine shared] start];
     [self startPolling];
@@ -241,8 +253,15 @@
                 self.qrImageView.image = [self qrImageFromString:qrString size:CGSizeMake(260.0, 260.0)];
             }
         } else if ([type isEqualToString:@"connection"]) {
-            self.connectionState = event[@"state"];
-            self.currentUser = event[@"user"];
+            // JSON null arrives as NSNull, and the engine sends `user: null` while
+            // connecting/closing. Coerce both fields so later subscripting and
+            // -isEqualToString: calls can never hit an NSNull.
+            id stateValue = event[@"state"];
+            self.connectionState = [stateValue isKindOfClass:[NSString class]] ? stateValue : nil;
+
+            id userValue = event[@"user"];
+            self.currentUser = [userValue isKindOfClass:[NSDictionary class]] ? userValue : nil;
+
             [self updateStatusLabel];
 
             // The engine sends `code` as a JSON number (a Baileys DisconnectReason),

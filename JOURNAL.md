@@ -222,3 +222,41 @@ Muse Spark 1.3 Contributor Free, Jev 1.13 Free.
   `$THEOS/toolchain/`), so a fresh machine no longer half-bootstraps and then fails at link time.
 - Device reachable at **192.168.1.71:22** over Wi-Fi (iPhone7,1 / iOS 12.5.8); deploying with
   `DEVICE_SSH_HOST=192.168.1.71 DEVICE_SSH_PORT=22 ./scripts/deploy.sh`.
+
+### Day 1 (cont.) — App crash on launch: `___chkstk_darwin`, and the runtime decision
+- First device launch of the packaged app aborted in dyld:
+  `Symbol not found: ___chkstk_darwin | Referenced from: .../Walink.app/Frameworks/NodeMobile.framework/NodeMobile | Expected in: /usr/lib/libSystem.B.dylib`
+  (`EXC_CORPSE_NOTIFY` / SIGABRT). Patching only the **declared** minimum iOS (13.0 → 12.0) in
+  `scripts/patch-framework.py` is therefore NOT sufficient: the code itself carries a reference the
+  iOS 12 runtime cannot satisfy.
+- `___chkstk_darwin` is Apple's stack-probe helper (appeared with the iOS 13 SDK). It is bound
+  **non-lazily**: `__DATA_CONST __got 0x021F4BB8 pointer 0 libSystem ___chkstk_darwin`.
+- Tried to reproduce locally: clang 23.1.1 (host) and clang 11.1.0 (Theos toolchain), targeting
+  `arm64-apple-ios12.0/13.0/16.0`, with `-fstack-clash-protection` and 40 KB–200 KB frames, at
+  -O0/-O1/-O2, emit **no** `___chkstk_darwin` — the trigger in the real build is something else
+  (V8/nodejs-mobile build flags), so "rebuild with min 12.0" is not proven either.
+- Prebuilt audit (`/tmp/opencode/prebuilt-report.txt`): **every v18.x** iOS framework references
+  `___chkstk_darwin` and declares min iOS 13. **v16.17.1** (release tag `nodejs-mobile-v16.17.1`)
+  declares min iOS **11.0** and has **zero** chkstk references. v16.17.0 / v16.11.0 / v18.6.0 /
+  v18.9.1 / v18.10.0 are not published as iOS assets.
+- v16 fallback risk: several *runtime* deps declare `engines >= 18/20` (`@cacheable/node-cache` ≥18,
+  `hashery` ≥20, `qified` ≥20, `keyv/bigmap` ≥18). Being measured before we switch.
+- In parallel: a background REA task is extracting the exact `___chkstk_darwin` ABI (size register,
+  whether helper or caller adjusts SP) from the v18 binary, so we can alternatively keep Node 18 and
+  satisfy the symbol by repointing its non-lazy bind at the main executable.
+
+### Day 1 (cont.) — Bug-audit fixes (engine + UI)
+A read-only audit subagent (`glm-5.3-flash-free`) reviewed `engine/` and `ios/Sources/`. Three real defects:
+- **Crash:** `WLHomeViewController.m` assigned `event[@"user"]` straight to `self.currentUser`; the
+  engine sends JSON `null` while `connecting`/`close`, so `NSJSONSerialization` produces `NSNull` and
+  `updateStatusLabel` died on `NSNull[@"name"]` seconds after launch. Now `state` is coerced to
+  `NSString` and `user` to `NSDictionary`, else `nil`.
+- **Hang:** `WLEngine -waitForReady` looped up to 120× (~4 min) on the *serial* `requestQueue`,
+  blocking every queued request, and only `NSLog`ged failure. Now bounded to 15 attempts (~30 s) and
+  calls `startupFailureHandler` (new public block property) so the UI shows
+  "Engine failed to start — check the log" instead of sitting at "Starting engine…".
+- **Shutdown:** `engine/main.js` `SIGTERM` relied on `server.close(cb)`, whose callback never runs
+  while 25 s long-poll sockets are open → now also arms
+  `setTimeout(() => process.exit(0), 1000).unref()`.
+- Cleared by the audit (no action): no iOS 13+ APIs, no retain cycles, no ATS problem for loopback
+  HTTP on iOS 12, timeout chain consistent (25 s poll < 30 s client < 300 s resource).

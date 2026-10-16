@@ -104,7 +104,12 @@ static NSString * const WLEngineBaseURL = @"http://127.0.0.1:8787";
 {
     NSURL *url = [NSURL URLWithString:[WLEngineBaseURL stringByAppendingString:@"/api/health"]];
 
-    for (NSInteger attempt = 0; attempt < 120; attempt++) {
+    // ~30 s budget: 15 attempts x (1.5 s request timeout + 0.5 s pause). This must stay
+    // bounded because it runs on the serial requestQueue, and every queued GET/POST/poll
+    // waits behind it.
+    const NSInteger maxAttempts = 15;
+
+    for (NSInteger attempt = 0; attempt < maxAttempts; attempt++) {
         __block BOOL ready = NO;
         dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
 
@@ -130,6 +135,9 @@ static NSString * const WLEngineBaseURL = @"http://127.0.0.1:8787";
     }
 
     NSLog(@"[WLEngine] engine did not become ready in time");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.startupFailureHandler) self.startupFailureHandler();
+    });
 }
 
 #pragma mark - API helpers

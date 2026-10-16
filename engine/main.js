@@ -384,6 +384,10 @@ server.listen(PORT, '127.0.0.1', () => {
 process.on('SIGTERM', () => {
   log('SIGTERM received, shutting down');
   cancelReconnect();
+  // server.close() never fires its callback while long-poll sockets are open (each can
+  // sit for up to 25 s), so arm a hard exit. unref() keeps the timer from holding the
+  // process open on its own.
+  setTimeout(() => process.exit(0), 1000).unref();
   server.close(() => process.exit(0));
 });
 
