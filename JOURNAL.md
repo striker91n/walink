@@ -281,3 +281,31 @@ A read-only audit subagent (`glm-5.3-flash-free`) reviewed `engine/` and `ios/So
   (loud, actionable error) instead of silently shipping a framework that aborts in dyld. It also
   takes `NODEJS_MOBILE_TAG`/`NODEJS_MOBILE_ASSET` (the 16.x tags are prefixed:
   `nodejs-mobile-v16.17.1`) and locates the arm64 device slice by `find` instead of a fixed path.
+
+### Day 1 (cont.) — Runtime switched to Node 16.17.1; the app now launches on the device
+Decision (user): stop waiting on CI, use the only prebuilt that loads on iOS 12.
+- `NODEJS_MOBILE_TAG=nodejs-mobile-v16.17.1 ./scripts/fetch-runtime.sh` → `vendor/NodeMobile.framework`
+  (51 MB, MinimumOSVersion 12.0, **zero** `___chkstk_darwin` imports, `_node_start`/napi symbols present).
+- Rebuilt (`0.1.0-3`) and deployed over USB: `dpkg` installs cleanly and `uiopen` **starts the app
+  with no dyld abort** — the crash that started this investigation is fixed. `ps` shows it alive and
+  the loopback API answers: `GET /api/health` → `{"ok":true}`,
+  `GET /api/state` → `{"connected":false,"user":null,"qr":null}`.
+- Caveat: the 16.17.1 framework bakes `--jitless` into its V8 options, so this runtime is
+  interpreter-only. The CI JIT artifact built at min iOS 12.0 stays the upgrade path (drop-in via
+  `SOURCE=ci`) if it proves chkstk-free.
+- Node 16 compat audit of `engine/node_modules` (background subagent) found one blocker and one
+  latent landmine:
+  * **Blocker:** Baileys 6.17.16 calls bare WebCrypto (`crypto.subtle`) in `lib/Utils/crypto.js`
+    (`hkdf`, `derivePairingCodeKey`), reached from 9 sites including `noise-handler.js` (hit on
+    every connect). Node 16 has no `crypto` global (only from Node 19, or behind a flag).
+    Fix taken: `node_start` argv now passes `--experimental-global-webcrypto` (exists since Node
+    16.15). Fallback if that regresses: patch `lib/Utils/crypto.js` to use `node:crypto`'s
+    `webcrypto`.
+  * **Landmine (not reachable):** `@cacheable/memory` uses `structuredClone`, but Baileys builds all
+    its NodeCaches with `useClones:false`. `hashery`'s async WebCrypto `hash()` and `qified@0.10.1`
+    (engines >=20) use nothing Node-20-only.
+- Observability gap fixed: on iOS the Node process' stdout/stderr are discarded, so the engine's
+  `console.log` output was invisible. `engine/main.js` now mirrors every `log()`/`logErr()` (plus a
+  new `uncaughtException` hook) into `<Documents>/.walink/engine.log`, rotating once at 512 KB, and
+  serves it as `GET /api/log?tail=N`. New helper `scripts/engine-log.sh [lines]` reads it over the
+  USB tunnel.

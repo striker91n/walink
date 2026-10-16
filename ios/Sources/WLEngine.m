@@ -87,16 +87,21 @@ static NSString * const WLEngineBaseURL = @"http://127.0.0.1:8787";
             return;
         }
 
+        // Node 16 has no `crypto` global unless this flag is set, and Baileys 6.17.16
+        // uses bare WebCrypto (`crypto.subtle`) in its noise handshake (Utils/crypto.js
+        // -> hkdf), so without it the first connection attempt throws.
         char *argv[] = {
             strdup("node"),
+            strdup("--experimental-global-webcrypto"),
             strdup(enginePath.UTF8String),
             NULL
         };
 
-        node_start(2, argv);
+        node_start(3, argv);
 
         free(argv[0]);
         free(argv[1]);
+        free(argv[2]);
     }
 }
 

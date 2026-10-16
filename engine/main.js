@@ -1,6 +1,7 @@
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { appendFileSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import makeWASocket, {
   DisconnectReason,
@@ -32,12 +33,63 @@ const state = {
   baileysVersion: null,
 };
 
+const LOG_FILE = path.join(DATA_DIR, 'engine.log');
+const LOG_MAX_BYTES = 512 * 1024;
+let logBytes = 0;
+try {
+  logBytes = statSync(LOG_FILE).size;
+} catch {
+  logBytes = 0;
+}
+
+function fmtArg(value) {
+  if (value instanceof Error) return value.stack || `${value.name}: ${value.message}`;
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+// Mirror every engine log into DATA_DIR/engine.log. On iOS the Node process' stdout/stderr
+// go nowhere, so this file is the only record of what the engine did — read it over SSH
+// (or add a tail view in the app). Rotates once at LOG_MAX_BYTES and never throws.
+function persistLog(level, args) {
+  try {
+    const line = `${new Date().toISOString()} ${level} ${args.map(fmtArg).join(' ')}\n`;
+    if (logBytes + line.length > LOG_MAX_BYTES) {
+      renameSync(LOG_FILE, `${LOG_FILE}.1`);
+      logBytes = 0;
+    }
+    appendFileSync(LOG_FILE, line);
+    logBytes += line.length;
+  } catch {
+    // Logging must never take the engine down.
+  }
+}
+
 function log(...args) {
   console.log('[walink]', ...args);
+  persistLog('INFO', args);
 }
 
 function logErr(...args) {
   console.error('[walink]', ...args);
+  persistLog('ERROR', args);
+}
+
+// Last `limit` lines of engine.log, for GET /api/log.
+function readLogTail(limit) {
+  try {
+    const lines = readFileSync(LOG_FILE, 'utf8').split('\n');
+    if (lines.length > 0 && lines[lines.length - 1] === '') {
+      lines.pop();
+    }
+    return lines.slice(-limit);
+  } catch {
+    return [];
+  }
 }
 
 function addEvent(payload) {
@@ -340,6 +392,15 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // Debugging aid: on iOS the Node process' stdout/stderr are discarded, so expose the
+    // mirrored log file. Usage: GET /api/log?tail=200
+    if (req.method === 'GET' && url.pathname === '/api/log') {
+      const requested = parseInt(url.searchParams.get('tail') || '200', 10);
+      const tail = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 2000) : 200;
+      respondJson(res, 200, { file: LOG_FILE, lines: readLogTail(tail) });
+      return;
+    }
+
     if (req.method === 'GET' && url.pathname === '/api/events') {
       await handleEvents(req, res, url);
       return;
@@ -389,6 +450,10 @@ process.on('SIGTERM', () => {
   // process open on its own.
   setTimeout(() => process.exit(0), 1000).unref();
   server.close(() => process.exit(0));
+});
+
+process.on('uncaughtException', (err) => {
+  logErr('uncaught exception:', err);
 });
 
 process.on('unhandledRejection', (err) => {
