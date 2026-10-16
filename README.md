@@ -6,7 +6,7 @@ runs [Baileys](https://github.com/WhiskeySockets/Baileys) **on the device**, and
 UIKit app drives it over a loopback socket.
 
 ```
-┌──────────────────────────── iPhone 6 Plus (iOS 12.5.8, checkra1n) ────────────────────────────┐
+┌──────────────────────────── iPhone 6 Plus (iOS 12.5.8, Amethyst) ─────────────────────────────┐
 │                                                                                               │
 │   ┌───────────────────────┐        loopback HTTP        ┌──────────────────────────────────┐  │
 │   │  Native UIKit app     │  http://127.0.0.1:8787  ──▶  │  Embedded Node 18 (NodeMobile)   │  │
@@ -46,7 +46,7 @@ route, not a novelty.
 | Constraint | Value | Consequence |
 |---|---|---|
 | Device OS | iOS 12.5.8 (max) | Everything must target iOS 12; no SwiftUI, no `NSURLSessionWebSocketTask` |
-| Jailbreak | checkra1n (checkm8), iOS 12.0+ | Semi-tethered: re-run after each reboot over DFU |
+| Jailbreak | **Amethyst** (iOS 12.0–13.7, all devices) | Semi-untethered + Procursus bootstrap (Sileo/Zebra); re-run the Amethyst app after reboot |
 | nodejs-mobile prebuilt | `MinimumOSVersion = 13.0` | **Unusable as shipped** → we rebuild with target 12.0 in CI |
 | V8 in nodejs-mobile | built with `--v8-options=--jitless` | Slower JS; optional JIT build + `dynamic-codesigning` for speed |
 | iOS 12 networking | no `NSURLSessionWebSocketTask` (iOS 13+) | app↔engine uses **REST + long-poll**, not WebSocket |
@@ -69,7 +69,8 @@ vendor/                                NodeMobile.framework lands here (git-igno
 - This repo built on **Linux** (CachyOS/Arch-family; Debian/Ubuntu works too).
 - `clang`, `ldid`, `make`, `git`, `node`/`npm`
 - `libimobiledevice` + `usbmuxd` (`iproxy`, `ideviceinfo`) to talk to the phone over USB
-- A jailbroken iPhone 6 Plus with OpenSSH installed (checkra1n exposes SSH on device port **44**)
+- A jailbroken iPhone 6 Plus (**Amethyst**, Procursus bootstrap). Install **OpenSSH** from Sileo/Zebra;
+  SSH listens on port **22** (default root password `alpine` — change it).
 
 ### 1. Build the iOS 12 Node runtime (GitHub macOS runner)
 
@@ -108,7 +109,7 @@ gh workflow run build-node-ios.yml -f jit=true
 ### 5. Install on the device over USB
 
 ```sh
-./scripts/deploy.sh               # iproxy 2222:44, scp, dpkg -i, ldid, uicache
+./scripts/deploy.sh               # iproxy 2222:22, scp, dpkg -i, ldid, uicache
 ```
 
 Open **Walink**, scan the QR with WhatsApp on your existing phone (Linked devices → Link a

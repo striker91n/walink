@@ -20,11 +20,11 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 350
     steps:
-      - name: Checkout nodejs-mobile
+      - name: Checkout nodejs-mobile (pinned, so the build cache stays valid)
         uses: actions/checkout@v4
         with:
           repository: nodejs-mobile/nodejs-mobile
-          ref: main
+          ref: v18.20.4
           path: nodejs-mobile
           submodules: false
 
@@ -33,29 +33,50 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install cmake
-        run: brew install cmake || true
+      # nodejs-mobile's ./configure wrapper runs `command -v python3.12 && exec python3.12`
+      # FIRST, so it picks the runner's 3.12 (no distutils) unless we shadow it.
+      # A PATH shim mapping python3.12 -> the 3.11 interpreter forces the right one.
+      - name: Shadow python3.12 with 3.11
+        run: |
+          set -e
+          py="$(command -v python3)"
+          python3 --version
+          shim="$RUNNER_TEMP/pyshim"
+          mkdir -p "$shim"
+          ln -sf "$py" "$shim/python3.12"
+          echo "$shim" >> "$GITHUB_PATH"
 
-      - name: Cache build
-        uses: actions/cache@v4
+      - name: Ensure cmake
+        run: command -v cmake >/dev/null 2>&1 || brew install cmake
+
+      # Cache the compiled objects + static libs so rebuilds are incremental.
+      # Unique key per run + a shared restore-keys prefix = always restore the
+      # newest cache, always write a fresh one.
+      - name: Restore build cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             nodejs-mobile/out
             nodejs-mobile/tools/ios-framework/bin
-          key: ${{ runner.os }}-node18-arm64-jit${{ inputs.jit }}-v1
+          key: node18-arm64-jit${{ inputs.jit }}-${{ github.run_id }}
+          restore-keys: |
+            node18-arm64-jit${{ inputs.jit }}-
 
-      # The ONLY reason the stock framework needs iOS 13 is this pbxproj value.
-      - name: Target iOS 12.0
+      - name: Patch build (iOS 12.0 + incremental)
         working-directory: nodejs-mobile
         run: |
           set -e
           PBX=tools/ios-framework/NodeMobile.xcodeproj/project.pbxproj
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/IPHONEOS_DEPLOYMENT_TARGET = 12.0;/g' "$PBX"
           grep -c "IPHONEOS_DEPLOYMENT_TARGET = 12.0;" "$PBX"
+          PREP=tools/ios_framework_prepare.sh
           # macOS getconf does not reliably support _NPROCESSORS_ONLN
-          sed -i '' 's/getconf _NPROCESSORS_ONLN/sysctl -n hw.ncpu/g' tools/ios_framework_prepare.sh
+          sed -i '' 's/getconf _NPROCESSORS_ONLN/sysctl -n hw.ncpu/g' "$PREP"
+          # Drop `make clean` so the restored cache is actually reused (incremental build).
+          sed -i '' '/^  make clean$/d' "$PREP"
+          grep -c 'make clean' "$PREP" || true
 
-      - name: Build framework (jitless, default)
+      - name: Build framework (jitless)
         if: ${{ !inputs.jit }}
         working-directory: nodejs-mobile
         run: ./tools/ios_framework_prepare.sh arm64
@@ -85,3 +106,13 @@ jobs:
           name: NodeMobile-ios-arm64${{ inputs.jit && '-jit' || '' }}
           path: artifact/NodeMobile.framework
           retention-days: 90
+
+      # Save even on failure so a partial build still speeds up the next attempt.
+      - name: Save build cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            nodejs-mobile/out
+            nodejs-mobile/tools/ios-framework/bin
+          key: node18-arm64-jit${{ inputs.jit }}-${{ github.run_id }}

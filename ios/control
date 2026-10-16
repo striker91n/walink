@@ -1,0 +1,10 @@
+Package: com.striker91n.walink
+Name: Walink
+Version: 0.1.0
+Architecture: iphoneos-arm
+Section: Applications
+Depends: firmware (>= 12.0)
+Maintainer: striker91n
+Author: striker91n
+Description: Unofficial WhatsApp client for jailbroken iOS 12
+ An embedded Node.js runtime runs Baileys on-device and the native UI drives it over loopback HTTP.

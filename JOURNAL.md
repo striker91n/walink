@@ -82,3 +82,26 @@ calling does not work in the user's country anyway).
   `getconf _NPROCESSORS_ONLN` with `sysctl -n hw.ncpu` in the prepare script.
 - User decision: **ship the JIT build.** Workflow `jit` input now defaults to `true`. Re-triggered as
   run `38930981133` (cancelled/replaced after the Python fix).
+
+### Day 1 (cont.) — Jailbreak clarified: **Amethyst** (not checkra1n)
+- Device is jailbroken with **Amethyst** — github.com/staturnzz/amethyst. Facts verified:
+  semi-untethered, **iOS 12.0–13.7, all devices**, MIT license. Initial release 2026-06-25;
+  stable **1.1** (2026-10-12). Uses the **Procursus bootstrap**; ships **Sileo + Zebra**. Explicitly
+  supports **fakesigned / AppSync** apps (1.0.2 fixed entitlements + library-validation on legacy-signed
+  binaries). Credits include Trigon, puaf_physpuppet, Operation Triangulation techniques.
+- Consequences for this project:
+  - **Rootful** (iOS 12/13) → packages install under `/`, `/Applications`; `dpkg`/`apt` present. Our
+    assumptions hold.
+  - **SSH = port 22** (NOT checkra1n's 44). OpenSSH may need installing from Sileo/Zebra; root pw `alpine`.
+  - After reboot: re-open the **Amethyst app** (semi-untethered), not a DFU flow. Free-signing expires ~weekly.
+  - Fakesigning support → our ldid-signed app and `dynamic-codesigning` (JIT) should load. Good sign for JIT.
+- Applied: `scripts/deploy.sh` default device SSH port **44 → 22**; README + reminders updated.
+
+### Day 1 (cont.) — CI root cause #2 + caching
+- nodejs-mobile's `./configure` is a shell wrapper that does
+  `command -v python3.12 && exec python3.12 "$0" "$@"` **before** trying 3.11 — so `setup-python`
+  never won. Fix: a PATH shim dir with `python3.12 -> python3.11`, appended to `$GITHUB_PATH`.
+- Perf/caching: pin nodejs-mobile to tag **v18.20.4**; **remove `make clean`** from the prepare
+  script (it was discarding everything); restore/save-cache `nodejs-mobile/out` +
+  `tools/ios-framework/bin` (key per-jit, unique per run + `restore-keys` prefix) → incremental
+  rebuilds. Also skip `brew install cmake` when cmake is already present.
