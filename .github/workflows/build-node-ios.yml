@@ -54,6 +54,7 @@ jobs:
       # newest cache, always write a fresh one.
       - name: Restore build cache
         uses: actions/cache/restore@v4
+        continue-on-error: true
         with:
           path: |
             nodejs-mobile/out
@@ -111,6 +112,7 @@ jobs:
       - name: Save build cache
         if: always()
         uses: actions/cache/save@v4
+        continue-on-error: true
         with:
           path: |
             nodejs-mobile/out
