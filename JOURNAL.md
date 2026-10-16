@@ -382,3 +382,32 @@ already validated for tool-calling — with `opencode-go/claude-haiku-5-5` as th
 - This is the first time the whole stack has run end to end:
   dyld load → Node 16 boot → Baileys CJS import → WebCrypto → Noise handshake (HKDF) →
   WhatsApp servers → linking QR.
+
+### Day 1 (cont.) — CI verdict: the GitHub macOS builder is not usable for this
+- Run 38931568114 (`build-node-ios`, dispatched ~16:23) **failed** in step 9
+  `Build framework (JIT)` with `Process completed with exit code 2` after ~53 minutes, and uploaded
+  no artifact (`Collect artifact` / `Upload framework` skipped). The captured log stops abruptly at
+  16:25:46 — 1m46s into the step, mid-build, with **no compiler diagnostic** — so the runner died
+  rather than the compiler rejecting code (free macOS runners are 3 vCPU / 7 GB and V8 wants more);
+  a `gtar` cache-save failure is reported alongside it.
+- **Bigger problem:** the `Patch build (iOS 12.0 + incremental)` step edits
+  `IPHONEOS_DEPLOYMENT_TARGET` inside `tools/ios-framework/NodeMobile.xcodeproj/project.pbxproj`, but
+  the object files are compiled by **gyp/ninja**, which takes the target from its own config. All
+  1278 `cc` invocations in the log use `-miphoneos-version-min=13.0`. So even a *successful* CI run
+  yields an **iOS-13-targeted** framework — exactly the configuration that emits
+  `___chkstk_darwin`. As written it can never produce an iOS-12-compatible runtime.
+- Decision: stop depending on CI. The v16.17.1 prebuilt works on the device today, and the JIT
+  question moves to the framework's own `node_v8_options` (a background subagent is checking whether
+  `--jitless` can simply be dropped or overridden — that would avoid a from-source build entirely).
+  If a from-source build is ever needed: patch the deployment target where **gyp** reads it
+  (e.g. `common.gypi`), avoid LTO on a 7 GB runner, and verify the artifact with
+  `llvm-nm -u | grep chkstk` before shipping it.
+
+### Day 1 (cont.) — Link-path observability
+- `engine.log` recorded failures but never the connection lifecycle, so "is that QR live?" was
+  unanswerable from the log. `onConnectionUpdate` now logs `connecting`, `open` (with the user id)
+  and `close` (with the disconnect code and whether we will reconnect), plus each new QR arrival.
+- A 25 s sampling test confirmed `/api/state`'s `qr` field **rotates** — the code is live, not a
+  frozen first value.
+- Added `scripts/show-qr.sh`: renders the QR in the terminal and re-renders in place whenever
+  WhatsApp rotates it, exiting as soon as the device reports `connected`.
