@@ -82,10 +82,11 @@ cd "$REPO_ROOT"
 # ---------------------------------------------------------------------------
 # 6. Report the produced .deb.
 # ---------------------------------------------------------------------------
-DEB="$(find packages -maxdepth 1 -name '*.deb' -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n1 | cut -d' ' -f2-)"
+# Theos writes packages next to the project makefile, i.e. ios/packages/.
+DEB="$(find ios/packages -maxdepth 1 -name '*.deb' -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n1 | cut -d' ' -f2-)"
 
 if [[ -z "$DEB" || ! -f "$DEB" ]]; then
-    echo "ERROR: No .deb package was produced in packages/." >&2
+    echo "ERROR: No .deb package was produced in ios/packages/." >&2
     exit 1
 fi
 

@@ -204,9 +204,18 @@
 {
     __weak typeof(self) weakSelf = self;
     [[WLEngine shared] pollEventsSince:self.lastEventId
-                            completion:^(NSArray *events) {
+                            completion:^(NSArray *events, NSError *error) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
+
+        if (error) {
+            // Engine down or restarting: back off so we don't spin on a dead socket.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                [strongSelf startPolling];
+            });
+            return;
+        }
 
         if (events.count > 0) {
             [strongSelf processEvents:events];
@@ -236,7 +245,15 @@
             self.currentUser = event[@"user"];
             [self updateStatusLabel];
 
-            NSString *code = event[@"code"];
+            // The engine sends `code` as a JSON number (a Baileys DisconnectReason),
+            // so coerce it before touching any NSString API.
+            id codeValue = event[@"code"];
+            NSString *code = nil;
+            if ([codeValue isKindOfClass:[NSNumber class]]) {
+                code = [(NSNumber *)codeValue stringValue];
+            } else if ([codeValue isKindOfClass:[NSString class]]) {
+                code = codeValue;
+            }
             if (code.length > 0) {
                 [self appendLog:[NSString stringWithFormat:@"[connection] state=%@ code=%@",
                                  self.connectionState ?: @"?", code]];

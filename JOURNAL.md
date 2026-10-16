@@ -128,3 +128,26 @@ calling does not work in the user's country anyway).
 - Open risks: (a) dev-box `theos` bootstrap needs `ldid` from a source that Docker/apt may not
   provide; (b) building `theos` natively needs an iOS 12 SDK (script picks 12.x from theos/sdks);
   (c) build cache may approach GitHub's per-repo cache size limit — narrow if needed.
+
+### Day 1 (cont.) — Code review + fixes; device reachable over USB and Wi-Fi
+- Read-only scout review of engine/ios/scripts against the API contract. Must-fix items applied:
+  - **[crash, app-breaking]** `WLHomeViewController` treated the `connection` event's `code` as an
+    `NSString` and called `-length`, but the engine emits an `NSNumber` (Baileys `DisconnectReason`)
+    → `unrecognized selector` the first time a disconnect arrives. Now coerced via `isKindOfClass:`.
+  - **[bug]** `scripts/build.sh` searched `packages/` at the repo root, but Theos writes packages to
+    `ios/packages/` → the script always reported "no .deb" after a good build. Fixed.
+  - `WLEngine`'s `/api/events` now reports transport/HTTP errors via an `NSError` (was a silent `@[]`),
+    and the poll loop **backs off 3 s** on error instead of hammering a dead engine.
+  - `engine/main.js`: `EADDRINUSE` → `process.exit(1)` (was a silent zombie with no HTTP server, so
+    the UI waited 3 min then gave up); oversized bodies now return **413** (were 500) and destroy the
+    socket; `fetchLatestBaileysVersion()` is cached (it did a network request on every reconnect).
+  - CI: dropped the `push: tags` trigger — it built **jitless** and uploaded as `NodeMobile-ios-arm64`
+    while `fetch-runtime.sh` expects `…-jit`; the "run it first" hint now passes `-f jit=true`.
+- **Device connectivity:** `idevice_id` had failed **not** because of the cable but because
+  **`usbmuxd.service` is masked and was not running** (the iPhone showed on the USB bus the whole
+  time). Started it ad hoc with `sudo usbmuxd -f &`. Device = **iPhone7,1 / iOS 12.5.8**.
+- **Wi-Fi IP found by scanning:** mapped the phone's USB-reported Wi-Fi MAC against the LAN neighbor
+  table (`ip neigh`) after a ping sweep, then confirmed with a direct `ssh` on port 22 (OpenSSH
+  listens on the network interface, not just USB). Host-specific details (UDID, serial, IP,
+  password) are kept **only** in the gitignored `scripts/device.env` — never in this public repo.
+- CI run `38931568114` still compiling at ~8 min.

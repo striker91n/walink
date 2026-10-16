@@ -232,7 +232,7 @@ static NSString * const WLEngineBaseURL = @"http://127.0.0.1:8787";
     }];
 }
 
-- (void)pollEventsSince:(NSInteger)since completion:(void (^)(NSArray *events))completion
+- (void)pollEventsSince:(NSInteger)since completion:(void (^)(NSArray *events, NSError *error))completion
 {
     dispatch_async(self.requestQueue, ^{
         NSString *path = [NSString stringWithFormat:@"/api/events?since=%ld", (long)since];
@@ -248,13 +248,17 @@ static NSString * const WLEngineBaseURL = @"http://127.0.0.1:8787";
                                                                          NSError *error) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (error) {
-                    completion(@[]);
+                    completion(nil, error);
                     return;
                 }
 
                 NSInteger statusCode = [(NSHTTPURLResponse *)response statusCode];
                 if (statusCode < 200 || statusCode >= 300) {
-                    completion(@[]);
+                    NSError *statusError = [NSError errorWithDomain:@"WLEngine"
+                                                               code:statusCode
+                                                           userInfo:@{NSLocalizedDescriptionKey:
+                                                                          [NSString stringWithFormat:@"HTTP %ld", (long)statusCode]}];
+                    completion(nil, statusError);
                     return;
                 }
 
@@ -263,9 +267,13 @@ static NSString * const WLEngineBaseURL = @"http://127.0.0.1:8787";
                                                           options:0
                                                             error:&jsonError];
                 if ([json isKindOfClass:[NSArray class]]) {
-                    completion(json);
+                    completion(json, nil);
                 } else {
-                    completion(@[]);
+                    NSError *parseError = jsonError ?: [NSError errorWithDomain:@"WLEngine"
+                                                                           code:-1
+                                                                       userInfo:@{NSLocalizedDescriptionKey:
+                                                                                      @"unexpected /api/events payload"}];
+                    completion(nil, parseError);
                 }
             });
         }];

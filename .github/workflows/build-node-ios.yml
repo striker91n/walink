@@ -9,11 +9,6 @@ on:
         description: "Build V8 with JIT (jailbroken-only; faster, not App-Store legal)"
         type: boolean
         default: true
-  push:
-    tags:
-      - "runtime-*"
-    paths:
-      - ".github/workflows/build-node-ios.yml"
 
 jobs:
   build:

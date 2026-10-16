@@ -29,6 +29,7 @@ const state = {
   saveCreds: null,
   sock: null,
   reconnectTimer: null,
+  baileysVersion: null,
 };
 
 function log(...args) {
@@ -98,7 +99,8 @@ async function readBody(req) {
   for await (const chunk of req) {
     total += chunk.length;
     if (total > 1024 * 1024) {
-      throw new Error('body too large');
+      req.destroy();
+      throw Object.assign(new Error('body too large'), { status: 413 });
     }
     chunks.push(chunk);
   }
@@ -220,7 +222,13 @@ async function connect() {
       state.saveCreds = saveCreds;
     }
 
-    const { version } = await fetchLatestBaileysVersion();
+    // Cache the Baileys version: fetching it hits the network, which is slow/absent on
+    // a phone right after boot. If the fetch fails, the outer catch reconnects.
+    if (!state.baileysVersion) {
+      const fetched = await fetchLatestBaileysVersion();
+      state.baileysVersion = fetched.version;
+    }
+    const version = state.baileysVersion;
     const sock = makeWASocket({
       version,
       auth: state.authState,
@@ -360,6 +368,12 @@ const server = http.createServer(handleRequest);
 
 server.on('error', (err) => {
   logErr('HTTP server error:', err);
+  // If the port is taken (e.g. a stale engine from a missed `killall`), bail out so the
+  // app's waitForReady() fails fast and the engine can be restarted cleanly.
+  if (err && err.code === 'EADDRINUSE') {
+    logErr(`port ${PORT} already in use; exiting`);
+    process.exit(1);
+  }
 });
 
 server.listen(PORT, '127.0.0.1', () => {

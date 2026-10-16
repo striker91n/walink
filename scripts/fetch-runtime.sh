@@ -27,7 +27,7 @@ RUN_ID="$(gh run list \
 if [[ -z "$RUN_ID" || "$RUN_ID" == "null" ]]; then
     echo "ERROR: No successful run of 'build-node-ios.yml' found." >&2
     echo "       Run it first with:" >&2
-    echo "           gh workflow run build-node-ios.yml" >&2
+    echo "           gh workflow run build-node-ios.yml -f jit=true" >&2
     echo "       Then wait for completion and re-run this script." >&2
     exit 1
 fi
