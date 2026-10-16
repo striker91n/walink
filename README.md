@@ -71,6 +71,7 @@ vendor/                                NodeMobile.framework lands here (git-igno
 - `libimobiledevice` + `usbmuxd` (`iproxy`, `ideviceinfo`) to talk to the phone over USB
 - A jailbroken iPhone 6 Plus (**Amethyst**, Procursus bootstrap). Install **OpenSSH** from Sileo/Zebra;
   SSH listens on port **22** (default root password `alpine` — change it).
+  See **[docs/device-setup.md](docs/device-setup.md)** for the full device checklist.
 
 ### 1. Build the iOS 12 Node runtime (GitHub macOS runner)
 
