@@ -2,6 +2,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { createHmac } from 'node:crypto';
 import { appendFileSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 
@@ -22,6 +23,53 @@ const {
   getContentType,
   useMultiFileAuthState,
 } = Baileys;
+
+// --- Node < 18 WebCrypto compatibility shim ---------------------------------------------
+// Baileys derives its Noise handshake keys with WebCrypto HKDF, and one call deliberately
+// passes an EMPTY input key material: noise-handler.js does `localHKDF(new Uint8Array(0))`.
+// Node >= 18 allows a zero-length key; Node 16's WebCrypto rejects it with
+//   DataError: Zero-length key is not supported   (node:internal/crypto/webcrypto)
+// which killed every connection attempt on this device.
+//
+// So replace Baileys' hkdf with a node:crypto HMAC implementation of RFC 5869 (SHA-256).
+// HMAC zero-pads its key to the block size, so an empty salt and a zero-filled hash-length
+// salt are identical here — matching WebCrypto exactly. Verified bit-identical against
+// webcrypto.subtle for empty/partial/full IKM, salt and info combinations.
+//
+// Baileys' internal callers do `crypto_1.hkdf(...)` (a property read at call time), so
+// patching the module object's export reaches all of them: noise-handler, chat-utils,
+// lt-hash, messages-media, messages-recv and socket. Only installed on old Node, so the
+// behaviour on Node >= 18 stays exactly Baileys' own.
+const HASH_LEN = 32; // SHA-256
+
+function hkdfExpandCompat(prk, infoBuf, length) {
+  const blocks = Math.ceil(length / HASH_LEN);
+  let previous = Buffer.alloc(0);
+  const okm = Buffer.alloc(blocks * HASH_LEN);
+  for (let i = 1; i <= blocks; i++) {
+    previous = createHmac('sha256', prk)
+      .update(previous)
+      .update(infoBuf)
+      .update(Buffer.from([i]))
+      .digest();
+    previous.copy(okm, (i - 1) * HASH_LEN);
+  }
+  return okm.subarray(0, length);
+}
+
+// same signature/shape as baileys' hkdf(buffer, expandedLength, { salt, info })
+function hkdfCompat(inputKeyMaterial, expandedLength, info = {}) {
+  const prk = createHmac('sha256', Buffer.from(info.salt ?? []))
+    .update(Buffer.from(inputKeyMaterial ?? []))
+    .digest();
+  const infoBuf =
+    typeof info.info === 'string'
+      ? Buffer.from(info.info, 'utf8')
+      : Buffer.from(info.info ?? []);
+  return hkdfExpandCompat(prk, infoBuf, expandedLength);
+}
+
+// (installation happens below, once the file logger exists — see "install the shim")
 
 const PORT = parseInt(process.env.WALINK_PORT, 10) || 8787;
 const DATA_DIR = process.env.WALINK_DATA_DIR || path.join(os.homedir(), '.walink');
@@ -102,6 +150,20 @@ function readLogTail(limit) {
     return lines.slice(-limit);
   } catch {
     return [];
+  }
+}
+
+// Install the shim defined above. Placed here (rather than at the top of the module) so the
+// outcome lands in engine.log; the patch only has to exist before connect() runs, which is
+// much later.
+const nodeMajor = Number.parseInt(process.versions.node.split('.')[0], 10);
+if (Number.isFinite(nodeMajor) && nodeMajor < 18) {
+  try {
+    const baileysCrypto = require('@whiskeysockets/baileys/lib/Utils/crypto.js');
+    baileysCrypto.hkdf = hkdfCompat;
+    log(`installed Node<18 WebCrypto HKDF shim (node ${process.versions.node})`);
+  } catch (err) {
+    logErr('failed to install the HKDF shim:', err);
   }
 }
 

@@ -325,3 +325,45 @@ Decision (user): stop waiting on CI, use the only prebuilt that loads on iOS 12.
   all five bindings resolve and `makeWASocket` is a function.
 - Also confirmed Node 16.17.1 accepts `--experimental-global-webcrypto`: an unknown option would
   make Node exit immediately, and the engine boots and serves HTTP with it in argv.
+
+### Day 1 (cont.) — Subagent model re-research (free tier hit its rate limit)
+The free tier started rejecting every subagent with `Rate limit exceeded`, so the model choice was
+re-evaluated from the authoritative Console pricing + privacy docs (https://opencode.ai/docs/zen/).
+Cheapest useful tiers, per 1M tokens (input/output):
+| Model | In | Out | Notes |
+| --- | --- | --- | --- |
+| GPT 5 Nano | $0.05 | $0.40 | cheapest, but nano-class is weak at multi-step tool use |
+| Claude Haiku 5.5 | $0.10 | $0.50 | strong tool use; Anthropic 30-day retention |
+| GPT 6 Luna | $0.10 | $0.50 | OpenAI 30-day retention |
+| GLM 5.3 Flash | $0.15 | $0.50 | **zero-retention, no training** |
+| Qwen3.8 Flash | $0.15 | $0.47 | zero-retention, no training |
+| MiMo V2.5 | $0.14 | $0.28 | free variant trains; paid variant not in the exception list |
+| Muse Spark 1.3 Contributor | $0.10 | $0.20 | **trains on your prompts/completions** — rejected for this work |
+Explicitly excluded for this project (they collect or train on data): Big Pickle, LL Alpha Free,
+Exo Free, MiMo-V2.6-Flash Free, MiMo-V2.5 Free, Muse Spark 1.3 Contributor Free, and the Nemotron
+free endpoints ("trial use only — do not submit personal or confidential data"). Beam Free is not
+training but keeps data 30 days.
+Decision: subagents default to **`opencode-go/glm-5.3-flash`** — zero-retention and the same family we
+already validated for tool-calling — with `opencode-go/claude-haiku-5-5` as the fallback.
+(Free `opencode-go/glm-5.3-flash-free` remains the preference when its rate limit allows.)
+
+### Day 1 (cont.) — Node 16 WebCrypto HKDF shim, and how to actually launch the app
+- With the WebCrypto flag in place the noise handshake got one step further and failed with
+  `DataError: Zero-length key is not supported` from `node:internal/crypto/webcrypto`
+  (`importGenericSecretKey`) via Baileys `Utils/crypto.js:151`.
+- Root cause: **`noise-handler.js:54` deliberately calls `hkdf(new Uint8Array(0), …)`** — a
+  zero-length input key material. Node ≥ 18 accepts it; **Node 16's WebCrypto rejects it**. (Verified
+  on the host: Node 24 accepts a zero-length HKDF key.)
+- Fix: when `process.versions.node` major < 18, `engine/main.js` replaces the Baileys crypto module's
+  `hkdf` export with an RFC 5869 implementation built on `node:crypto`'s `createHmac`. HMAC zero-pads
+  its key to the block size, so an empty salt and a zero-filled hash-length salt are identical —
+  verified **bit-identical to `webcrypto.subtle`** for empty/partial/full IKM, salt and info, including
+  the empty-IKM case. Baileys' callers all read `(0, crypto_1.hkdf)(…)` (property access at call time)
+  and `Utils/index.js` re-exports via a live getter, so patching the export object reaches every call
+  site (verified). `derivePairingCodeKey`'s PBKDF2 has a non-empty key and is unaffected.
+- Also learned how to launch the app over SSH after a deploy:
+  `uiopen --path /Applications/Walink.app` → **`No application at path` (rc=1)**, and a bare path
+  silently does nothing; `uiopen --bundleid com.striker91n.walink` works reliably. Added
+  `scripts/launch.sh` so launches always use the working form (and it verifies the process came up).
+- A locked/asleep device makes every launch fail silently (verified: Preferences would not start
+  either). Wake the phone before deploying.
