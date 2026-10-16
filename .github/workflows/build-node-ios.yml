@@ -1,7 +1,21 @@
 name: build-node-ios
 
-# Builds nodejs-mobile's NodeMobile.framework for iOS 12 (device, arm64) on a free
-# GitHub macOS runner, then uploads it as an artifact for scripts/fetch-runtime.sh.
+# Builds nodejs-mobile's NodeMobile.framework for iOS 12 (device, arm64) on a free GitHub
+# macOS runner, then uploads it as an artifact for scripts/fetch-runtime.sh.
+#
+# ── Why the cache matters, and why it used to save nothing ────────────────────────────────
+# The expensive work is `make -j` compiling Node/V8, which writes into `nodejs-mobile/out`.
+# Two things prevented that tree from ever being reused, so every run was a full ~50 min build
+# that then died on the 7 GB runner and cached nothing (the repo had ZERO cache entries):
+#   1. `tools/ios_framework_prepare.sh` runs `make clean` before each target and
+#      `rm -rf out_ios_$1` when it sets the output dir — both wipe the restored tree.
+#   2. The save used a path (`tools/ios-framework/bin`) that may not exist yet, so `tar`
+#      failed with exit 2 and no cache entry was created.
+# Both are handled below (strip the cleaning, create the paths up front), and the cache is
+# pruned so the repo's 10 GB budget cannot silently reject future saves.
+#
+# First run: ~50 min. Later runs: incremental, because `out/` is restored.
+
 on:
   workflow_dispatch:
     inputs:
@@ -10,10 +24,15 @@ on:
         type: boolean
         default: true
 
+# Two builds must never race for the same cache key.
+concurrency:
+  group: build-node-ios-${{ inputs.jit }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: macos-14
-    timeout-minutes: 350
+    timeout-minutes: 240
     steps:
       - name: Checkout nodejs-mobile (pinned, so the build cache stays valid)
         uses: actions/checkout@v4
@@ -44,53 +63,108 @@ jobs:
       - name: Ensure cmake
         run: command -v cmake >/dev/null 2>&1 || brew install cmake
 
-      # Cache the compiled objects + static libs so rebuilds are incremental.
-      # Unique key per run + a shared restore-keys prefix = always restore the
-      # newest cache, always write a fresh one.
+      # Create the cache paths up front so a save can never fail on a missing directory.
+      - name: Prepare cache directories
+        run: |
+          mkdir -p nodejs-mobile/out \
+                   nodejs-mobile/out_ios_arm64 \
+                   nodejs-mobile/tools/ios-framework/bin
+
+      # Unique key per run + a shared prefix: always restore the newest cache, always write a
+      # fresh one (so partial progress after a runner death is not lost).
       - name: Restore build cache
+        id: cache
         uses: actions/cache/restore@v4
         continue-on-error: true
         with:
           path: |
             nodejs-mobile/out
+            nodejs-mobile/out_ios_arm64
             nodejs-mobile/tools/ios-framework/bin
           key: node18-arm64-jit${{ inputs.jit }}-${{ github.run_id }}
           restore-keys: |
             node18-arm64-jit${{ inputs.jit }}-
 
-      - name: Patch build (iOS 12.0 + incremental)
+      - name: Report cache state
+        run: |
+          echo "restored key: ${{ steps.cache.outputs.cache-matched-key || '(no cache — first run)' }}"
+          du -sh nodejs-mobile/out nodejs-mobile/out_ios_arm64 nodejs-mobile/tools/ios-framework/bin 2>/dev/null || true
+          if [ -d nodejs-mobile/out/Release ]; then
+            echo "pre-existing object files: $(find nodejs-mobile/out/Release -name '*.o' 2>/dev/null | wc -l)"
+          fi
+
+      - name: Patch build (iOS 12.0, no clean, reusable tree)
         working-directory: nodejs-mobile
         run: |
           set -e
+          # 1. The deployment target that actually reaches the compiler lives in common.gypi,
+          #    because gyp/ninja build the object files. Patching only the Xcode project left
+          #    every cc line at -miphoneos-version-min=13.0 — which is exactly what made the
+          #    framework import ___chkstk_darwin and abort in dyld on iOS 12.
+          sed -i '' "s/'IPHONEOS_DEPLOYMENT_TARGET': '13\.0'/'IPHONEOS_DEPLOYMENT_TARGET': '12.0'/g" common.gypi
+          echo "--- common.gypi deployment target ---"
+          grep -n "IPHONEOS_DEPLOYMENT_TARGET" common.gypi | head -3
+          # 2. Keep the Xcode link step consistent with it.
           PBX=tools/ios-framework/NodeMobile.xcodeproj/project.pbxproj
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/IPHONEOS_DEPLOYMENT_TARGET = 12.0;/g' "$PBX"
-          grep -c "IPHONEOS_DEPLOYMENT_TARGET = 12.0;" "$PBX"
           PREP=tools/ios_framework_prepare.sh
-          # macOS getconf does not reliably support _NPROCESSORS_ONLN
+          # 3. macOS getconf does not reliably support _NPROCESSORS_ONLN.
           sed -i '' 's/getconf _NPROCESSORS_ONLN/sysctl -n hw.ncpu/g' "$PREP"
-          # Drop `make clean` so the restored cache is actually reused (incremental build).
+          # 4. Incrementality: without this the restored cache is wiped and every run is a full
+          #    rebuild. `make clean` appears three times (one per target) and the output dir is
+          #    removed by set_framework_target_dir().
           sed -i '' '/^  make clean$/d' "$PREP"
+          sed -i '' '/rm -rf out_ios_/d' "$PREP"
+          echo "--- remaining destructive lines (want 0 0) ---"
           grep -c 'make clean' "$PREP" || true
+          grep -c 'rm -rf out_ios_' "$PREP" || true
 
       - name: Build framework (jitless)
         if: ${{ !inputs.jit }}
         working-directory: nodejs-mobile
+        timeout-minutes: 150
         run: ./tools/ios_framework_prepare.sh arm64
 
       - name: Build framework (JIT)
         if: ${{ inputs.jit }}
         working-directory: nodejs-mobile
+        timeout-minutes: 150
         run: |
           set -e
           sed -i '' 's/--v8-options=--jitless//' tools/ios_framework_prepare.sh
           ./tools/ios_framework_prepare.sh arm64
+
+      # Fail loudly on the exact bug that cost us a day of debugging, instead of shipping a
+      # framework that dies in dyld on the target device.
+      - name: Verify the framework (iOS 12 target, no iOS 13-only imports)
+        working-directory: nodejs-mobile
+        run: |
+          set -euo pipefail
+          FR=out_ios_arm64/iphoneos-arm64/Release-iphoneos/NodeMobile.framework
+          BIN="$FR/NodeMobile"
+          test -f "$BIN" || { echo "::error::framework missing at $FR"; find . -name NodeMobile.framework; exit 1; }
+
+          echo "--- deployment target actually compiled in ---"
+          vtool -show-build "$BIN" 2>/dev/null | grep -iE "minos|sdk" || true
+
+          echo "--- node_v8_options baked into the framework ---"
+          /usr/libexec/PlistBuddy -c "Print :node_v8_options" "$FR/Info.plist" 2>/dev/null \
+            || echo "(no node_v8_options key)"
+
+          echo "--- iOS 13-only imports (these abort in dyld on iOS 12) ---"
+          if nm -u "$BIN" | grep -qE '_+chkstk_darwin'; then
+            echo "::error::NodeMobile imports ___chkstk_darwin, which iOS 12's libSystem does not export."
+            nm -u "$BIN" | grep -i chkstk
+            exit 1
+          fi
+          echo "OK: no ___chkstk_darwin import"
 
       - name: Collect artifact
         working-directory: nodejs-mobile
         run: |
           set -e
           FR=out_ios_arm64/iphoneos-arm64/Release-iphoneos/NodeMobile.framework
-          test -d "$FR" || { echo "framework missing at $FR"; find . -name NodeMobile.framework; exit 1; }
+          test -d "$FR" || { echo "framework missing at $FR"; exit 1; }
           mkdir -p "$GITHUB_WORKSPACE/artifact"
           cp -R "$FR" "$GITHUB_WORKSPACE/artifact/"
           echo "--- Info.plist ---"
@@ -103,7 +177,7 @@ jobs:
           path: artifact/NodeMobile.framework
           retention-days: 90
 
-      # Save even on failure so a partial build still speeds up the next attempt.
+      # Save even on failure, so a runner death does not throw away the progress it made.
       - name: Save build cache
         if: always()
         uses: actions/cache/save@v4
@@ -111,5 +185,29 @@ jobs:
         with:
           path: |
             nodejs-mobile/out
+            nodejs-mobile/out_ios_arm64
             nodejs-mobile/tools/ios-framework/bin
           key: node18-arm64-jit${{ inputs.jit }}-${{ github.run_id }}
+
+      # Keep the repo's 10 GB cache budget from filling with superseded entries: once it is full
+      # every save fails silently, which is why this repo had zero caches. Keep the two newest.
+      - name: Prune superseded caches
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PREFIX="node18-arm64-jit${{ inputs.jit }}-"
+          gh api "repos/${{ github.repository }}/actions/caches?per_page=100" \
+            --jq ".actions_caches[] | select(.key | startswith(\"${PREFIX}\")) | \"\(.last_accessed_at) \(.id)\"" \
+            | sort -r | awk 'NR>2 {print $2}' \
+            | while read -r id; do
+                if [ -n "$id" ]; then
+                  echo "pruning cache $id"
+                  gh api -X DELETE "repos/${{ github.repository }}/actions/caches/$id" || true
+                fi
+              done
+          echo "--- remaining caches ---"
+          gh api "repos/${{ github.repository }}/actions/caches?per_page=100" \
+            --jq ".actions_caches[] | select(.key | startswith(\"${PREFIX}\")) | \"\(.key)  \(.size_in_bytes/1048576|floor) MB\""
