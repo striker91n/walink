@@ -367,3 +367,18 @@ already validated for tool-calling — with `opencode-go/claude-haiku-5-5` as th
   `scripts/launch.sh` so launches always use the working form (and it verifies the process came up).
 - A locked/asleep device makes every launch fail silently (verified: Preferences would not start
   either). Wake the phone before deploying.
+
+### Day 1 (cont.) — QR linking works: the engine emits a live companion-linking code
+- With the HKDF shim in place the engine log shows the shim install and a clean start, with
+  nothing after it (every `DataError: Zero-length key is not supported` entry is from before):
+      17:34:22.790Z INFO  installed Node<18 WebCrypto HKDF shim (node 16.17.1)
+      17:34:22.839Z INFO  engine listening on 127.0.0.1:8787
+- `GET /api/state` now returns a real QR:
+      {"connected":false,"user":null,"qr":"2@KjwZmv5+...=="}
+  Rendered it with `qrencode -t ANSIUTF8` straight from the loopback API over the USB tunnel, so
+  the code can be scanned from the laptop screen as well as from the in-app QR image.
+- Fixed a quoting bug in `scripts/engine-log.sh`: a nested escaped quote inside the single-quoted
+  `python3 -c` program produced a SyntaxError, so the helper printed nothing. It now emits the log.
+- This is the first time the whole stack has run end to end:
+  dyld load → Node 16 boot → Baileys CJS import → WebCrypto → Noise handshake (HKDF) →
+  WhatsApp servers → linking QR.

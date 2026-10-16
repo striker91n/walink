@@ -287,17 +287,21 @@ function onConnectionUpdate(update) {
 
     if (qr) {
       state.qr = qr;
+      // The string itself is long and rotates every ~20 s, so log only that one arrived.
+      log('received a new linking QR from WhatsApp');
       addEvent({ type: 'qr', qr });
     }
 
     if (connection === 'connecting') {
       state.connecting = true;
+      log('connection: connecting');
       addEvent({ type: 'connection', state: 'connecting', user: null, code: null, loggedOut: false });
     } else if (connection === 'open') {
       state.connecting = false;
       state.connected = true;
       state.qr = null;
       state.user = state.sock?.user ?? null;
+      log(`connection: open (user=${state.user?.id ?? 'unknown'})`);
       addEvent({ type: 'connection', state: 'open', user: state.user, code: null, loggedOut: false });
     } else if (connection === 'close') {
       state.connecting = false;
@@ -305,6 +309,7 @@ function onConnectionUpdate(update) {
       state.qr = null;
       const code = lastDisconnect?.error?.output?.statusCode ?? null;
       const loggedOut = code === DisconnectReason.loggedOut;
+      logErr(`connection: closed (code=${code}, ${loggedOut ? 'logged out' : 'will reconnect'})`);
       addEvent({ type: 'connection', state: 'close', user: null, code, loggedOut });
       if (!loggedOut) {
         scheduleReconnect();

@@ -45,7 +45,8 @@ try:
 except ValueError:
     sys.stdout.write(sys.stdin.read())
     raise SystemExit(0)
-print(f"# {doc.get(\"file\", \"?\")}")
+label = doc.get("file", "?")
+print("# " + str(label))
 lines = doc.get("lines") or []
 if not lines:
     print("# (log is empty)")
